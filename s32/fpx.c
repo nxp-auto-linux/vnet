@@ -62,53 +62,63 @@ extern int s32v_pcie_setup_outbound(void *data);
 extern void __dma_flush_range(const void *, const void *);
 extern void __inval_cache_range(const void *, const void *);
 
+
+
 static netdev_tx_t
 fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct fpx_enet_private *fep = netdev_priv(ndev);
 	unsigned long flags;
+	u64 write_i, read_i;
 
 	// TEST ONLY - don't to dma chaining.
 	while (STS_TX_IDLE != fep->transmiter_status);
+
+	write_i = fep->ctrl_ved_r->current_write_index;
+	read_i = fep->ctrl_ved_r->current_read_index;
 
 	spin_lock_irqsave(&fep->spinlock, flags);
 
 	if (STS_TX_IDLE == fep->transmiter_status) {
 		spin_unlock_irqrestore(&fep->spinlock, flags);
 
-		{ //TX current frame 
-			unsigned int write_i;
-			unsigned long long int dest_addr;
+		if (write_i > (read_i + MAX_NO_BUFFERS)) {
+#if CHAIN_SUPPORT
+			fep->sk_buff_queue_tx[fep->tail_totx & (SKBUF_Q_SIZE - 1)] = skb;
+			fep->tail_totx ++; // add sk_buff to tail
+#else
+			dev_kfree_skb_any(skb);
+#endif
+		}
+		else {
+			u64 dest_addr;
 
 			void* start;
 			void* end;
 
-			write_i = (unsigned long)fep->remote_write_index;
-
 			fep->sk_buff_queue_tx_inprogress[0] = skb;
 			fep->tail_txinprogress = 1;
 
-			dest_addr = (unsigned long long int)(S32V_REMOTE_PCI_BASE
-					+ OFFSET_TO_DATA + ((write_i & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE));
+			dest_addr = (unsigned long long int)(S32V_REMOTE_PCI_BASE +
+				 OFFSET_TO_DATA + ((write_i & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE));
 			write_i ++;
-			fep->remote_write_index = write_i;
 
 			/* prepare DMA transfer tmpTx*/
-			fep->cfg_ved_l->d_tx[0].chan_ctrl = 1;
+			fep->d_tx[0].chan_ctrl = 1;
 			/* added the length of buffer in front of the data buffer */
-			fep->cfg_ved_l->d_tx[0].size = 
+			fep->d_tx[0].size =
 				skb->len + sizeof(int);
 
 			start = skb->data - sizeof(int);
 			end = start + skb->len + sizeof(int);
-			fep->cfg_ved_l->d_tx[0].sar_low =
+			fep->d_tx[0].sar_low =
 				lower_32_bits(virt_to_phys(start));
-			fep->cfg_ved_l->d_tx[0].sar_high =
+			fep->d_tx[0].sar_high =
 				upper_32_bits(virt_to_phys(start));
 
-			fep->cfg_ved_l->d_tx[0].dar_low =
+			fep->d_tx[0].dar_low =
 				lower_32_bits(dest_addr);
-			fep->cfg_ved_l->d_tx[0].dar_high =
+			fep->d_tx[0].dar_high =
 				upper_32_bits(dest_addr);
 			/* update inband length, write over unused ethernet header */
 			*(int*)(start) = skb->len;
@@ -121,34 +131,35 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 			ndev->stats.tx_bytes += skb->len;
 
 			/* update descriptor for write index */
-			fep->cfg_ved_l->val[0] = write_i;
-			fep->cfg_ved_l->d_tx[1].chan_ctrl = 0x19; /* LIE + RIE */
-			fep->cfg_ved_l->d_tx[1].size = sizeof(int);
-			fep->cfg_ved_l->d_tx[1].sar_low =
-				lower_32_bits(S32_PCI_SMEM + sizeof(int));
-			fep->cfg_ved_l->d_tx[1].sar_high =
-				upper_32_bits(S32_PCI_SMEM + sizeof(int));
+			fep->ctrl_ved_l->val[0] = write_i;
+			fep->d_tx[1].chan_ctrl = 0x19; /* LIE + RIE */
+			fep->d_tx[1].size = sizeof(u64);
+			fep->d_tx[1].sar_low =
+				lower_32_bits(S32_PCI_SMEM + 2 * sizeof(u64));
+			fep->d_tx[1].sar_high =
+				upper_32_bits(S32_PCI_SMEM + 2 * sizeof(u64));
 
-			fep->cfg_ved_l->d_tx[1].dar_low =
+			fep->d_tx[1].dar_low =
 				lower_32_bits(S32V_REMOTE_PCI_BASE);
-			fep->cfg_ved_l->d_tx[1].dar_high =
+			fep->d_tx[1].dar_high =
 				upper_32_bits(S32V_REMOTE_PCI_BASE);
 
-			fep->cfg_ved_l->d_tx[2].chan_ctrl = 0x6; /* LLP */
-			fep->cfg_ved_l->d_tx[2].size = 0;
-			fep->cfg_ved_l->d_tx[2].sar_low =
-				lower_32_bits(S32_PCI_SMEM + 4 * sizeof(int));
-			fep->cfg_ved_l->d_tx[2].sar_high =
-				upper_32_bits(S32_PCI_SMEM + 4 * sizeof(int));
+			fep->d_tx[2].chan_ctrl = 0x6; /* LLP */
+			fep->d_tx[2].size = 0;
+			fep->d_tx[2].sar_low =
+				lower_32_bits(virt_to_phys(fep->d_tx));
+			fep->d_tx[2].sar_high =
+				upper_32_bits(virt_to_phys(fep->d_tx));
+
 			/* do TX */
 			/* Program DMA regs for LL mode */
-			start = (void*)&fep->cfg_ved_l->val[0];
-			end = (void*)&fep->cfg_ved_l->d_tx[3];
+			start = (void*)&fep->d_tx[0];
+			end = (void*)&fep->d_tx[3];
 
 			wmb();
 			__dma_flush_range((const void*)start, (const void*)end);
 			fep->transmiter_status = STS_TX_INPROGRESS;
-				dw_start_dma_llw(fep->pp, (S32_PCI_SMEM + 4 * sizeof(int)));
+			dw_start_dma_llw(fep->pp, virt_to_phys(fep->d_tx));
 		}
 	}
 	else {
@@ -164,17 +175,6 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		}
 	}
 	return NETDEV_TX_OK;
-}
-
-static void
-fpx_stop(struct net_device *ndev)
-{
-}
-
-static void
-fpx_timeout(struct net_device *ndev)
-{
-	ndev->stats.tx_errors++;
 }
 
 void fpx_irq_callback(u32 type)
@@ -197,6 +197,7 @@ void fpx_irq_callback(u32 type)
 
 	/* should we do other TX */
 	if (fep->head_totx != fep->tail_totx) {
+#if CHAIN_SUPPORT
 		int start_frame = fep->head_totx;
 		int frame_to_tx = (fep->tail_totx - start_frame);
 
@@ -221,21 +222,21 @@ void fpx_irq_callback(u32 type)
 
 				frame_to_tx --;
 				/* prepare DMA transfer tmpTx*/
-				fep->cfg_ved_l->d_tx[index].chan_ctrl = 1;
+				fep->d_tx[index].chan_ctrl = 1;
 				/* added the length of buffer in front of the data buffer */
-				fep->cfg_ved_l->d_tx[index].size = 
+				fep->d_tx[index].size =
 					fep->sk_buff_queue_tx[start_frame]->len + sizeof(int);
 
 				start = fep->sk_buff_queue_tx[start_frame]->data - sizeof(int);
 				end = start + fep->sk_buff_queue_tx[start_frame]->len + sizeof(int);
-				fep->cfg_ved_l->d_tx[index].sar_low =
+				fep->d_tx[index].sar_low =
 					lower_32_bits(virt_to_phys(start));
-				fep->cfg_ved_l->d_tx[index].sar_high =
+				fep->d_tx[index].sar_high =
 					upper_32_bits(virt_to_phys(start));
 
-				fep->cfg_ved_l->d_tx[index].dar_low =
+				fep->d_tx[index].dar_low =
 					lower_32_bits(dest_addr);
-				fep->cfg_ved_l->d_tx[index].dar_high =
+				fep->d_tx[index].dar_high =
 					upper_32_bits(dest_addr);
 				/* update inband length, write over unused ethernet header */
 				*(int*)(start) = fep->sk_buff_queue_tx[start_frame]->len;
@@ -269,34 +270,35 @@ void fpx_irq_callback(u32 type)
 			fep->remote_write_index = index + write_i;
 
 			/* update descriptor for write index */
-			fep->cfg_ved_l->val[0] = index + write_i;
-			fep->cfg_ved_l->d_tx[index].chan_ctrl = 0x19; /* LIE + RIE */
-			fep->cfg_ved_l->d_tx[index].size = sizeof(int);
-			fep->cfg_ved_l->d_tx[index].sar_low =
+			fep->ctrl_ved_l->val[0] = index + write_i;
+			fep->d_tx[index].chan_ctrl = 0x19; /* LIE + RIE */
+			fep->d_tx[index].size = sizeof(int);
+			fep->d_tx[index].sar_low =
 				lower_32_bits(S32_PCI_SMEM + sizeof(int));
-			fep->cfg_ved_l->d_tx[index].sar_high =
+			fep->d_tx[index].sar_high =
 				upper_32_bits(S32_PCI_SMEM + sizeof(int));
 
-			fep->cfg_ved_l->d_tx[index].dar_low =
+			fep->d_tx[index].dar_low =
 				lower_32_bits(S32V_REMOTE_PCI_BASE);
-			fep->cfg_ved_l->d_tx[index].dar_high =
+			fep->d_tx[index].dar_high =
 				upper_32_bits(S32V_REMOTE_PCI_BASE);
 
-			fep->cfg_ved_l->d_tx[index + 1].chan_ctrl = 0x6; /* LLP */
-			fep->cfg_ved_l->d_tx[index + 1].size = 0;
-			fep->cfg_ved_l->d_tx[index + 1].sar_low =
+			fep->d_tx[index + 1].chan_ctrl = 0x6; /* LLP */
+			fep->d_tx[index + 1].size = 0;
+			fep->d_tx[index + 1].sar_low =
 				lower_32_bits(S32_PCI_SMEM + 4 * sizeof(int));
-			fep->cfg_ved_l->d_tx[index + 1].sar_high =
+			fep->d_tx[index + 1].sar_high =
 				upper_32_bits(S32_PCI_SMEM + 4 * sizeof(int));
 			/* do TX */
 			/* Program DMA regs for LL mode */
-			start = (void*)&fep->cfg_ved_l->val[0];
-			end = (void*)&fep->cfg_ved_l->d_tx[index + 2];
+			start = (void*)&fep->val[0];
+			end = (void*)&fep->d_tx[index + 2];
 			wmb();
 			__dma_flush_range((const void*)start, (const void*)end);
 
-			dw_start_dma_llw(fep->pp, (S32_PCI_SMEM + 4 * sizeof(int)));
+			dw_start_dma_llw(fep->pp, virt_to_phys(fep->d_tx));
 		}
+#endif
 	}
 	else {
 		fep->transmiter_status = STS_TX_IDLE;
@@ -310,24 +312,14 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 	int pkts = 0;
 	struct sk_buff *sk;
 
-	unsigned int write_i, read_i;
+	u64 write_i, read_i;
 	volatile void* tmp_data;
 	int sk_index;
 
-	__inval_cache_range((const void*)&fep->cfg_ved_l->current_write_index, (const void*)&fep->cfg_ved_l->val[0]);
-	write_i = fep->cfg_ved_l->current_write_index;
-	read_i = fep->current_read_index;
+	write_i = fep->ctrl_ved_l->current_write_index;
+	read_i = fep->ctrl_ved_l->current_read_index;
 
-
-	pkts = write_i - read_i;
-	if (MAX_NO_BUFFERS < pkts) {
-		read_i += (pkts - MAX_NO_BUFFERS);
-		ndev->stats.rx_over_errors += (pkts - MAX_NO_BUFFERS);
-	}
-
-	pkts = 0;
-	
-	tmp_data = ((void *)fep->cfg_ved_l->received_data) +
+	tmp_data = ((volatile void *)fep->received_data_l) +
 		((read_i & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE);
 
 	while ((pkts < budget) && (write_i > read_i)) {
@@ -376,7 +368,7 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 				sk->protocol = htons(ETH_P_IP);
 
 				memcpy((tmp), (const void *)tmp_data + 4, buf_len);
-				sk->ip_summed = CHECKSUM_NONE;
+				sk->ip_summed = CHECKSUM_UNNECESSARY;
 
 				netif_receive_skb(sk);
 			}
@@ -393,17 +385,15 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 			ndev->stats.rx_errors ++;
 		}
 		read_i ++;
-		__inval_cache_range((const void*)&fep->cfg_ved_l->current_write_index, (const void*)&fep->cfg_ved_l->val[0]);
-		write_i = fep->cfg_ved_l->current_write_index; /* new write index read */
+		write_i = fep->ctrl_ved_l->current_write_index; /* new write index read */
+		fep->ctrl_ved_l->current_read_index = read_i;
 		if (read_i & ((MAX_NO_BUFFERS - 1))) {
 			tmp_data += MAX_BUFFER_SIZE;
 		}
 		else {
-			tmp_data = (void *)fep->cfg_ved_l->received_data;
+			tmp_data = (void *)fep->received_data_l;
 		}
 	}
-
-	fep->current_read_index = read_i;
 
 	/* re-enable interrupts */
 	if (pkts < budget) {
@@ -412,23 +402,6 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 	}
 	return pkts;
 }
-
-
-static void fpx_enet_get_drvinfo(struct net_device *ndev,
-				 struct ethtool_drvinfo *info)
-{
-}
-
-
-static const struct ethtool_ops fpx_enet_ethtool_ops = {
-	.get_drvinfo		= fpx_enet_get_drvinfo,
-};
-
-static int fpx_enet_ioctl(struct net_device *ndev, struct ifreq *rq, int cmd)
-{
-	return 0;
-}
-
 
 static irqreturn_t fpx_rx (int irq, void *dev_instance) {
 
@@ -455,8 +428,8 @@ fpx_enet_open(struct net_device *ndev)
 	else {
 		struct s32v_outbound_region outbound;
 		fep->rx_sk_buff_index = 0;
-		fep->remote_write_index = 0;
-		fep->current_read_index = 0;
+		fep->ctrl_ved_l->current_write_index = 0;
+		fep->ctrl_ved_l->current_read_index = 0;
 		for (retval = 0; retval < SKBUF_Q_SIZE; retval ++) {
 			/* max ethernet frame length */
 			struct sk_buff *sk = __netdev_alloc_skb_ip_align(ndev, MAX_BUFFER_SIZE, GFP_KERNEL);
@@ -468,8 +441,6 @@ fpx_enet_open(struct net_device *ndev)
 				retval --;
 			}
 		}
-		memset_io((void *)fep->cfg_ved_l, 0,
-			sizeof(struct config_ved)); /* clear local data */
 
 		fep->transmiter_status = STS_TX_IDLE;
 		fep->head_totx = fep->tail_totx = 0;
@@ -558,7 +529,6 @@ fpx_enet_close(struct net_device *ndev)
 	if (netif_device_present(ndev)) {
 		napi_disable(&fep->napi);
 		netif_tx_disable(ndev);
-		fpx_stop(ndev); /* fpx_stop, stop dma, disable dma int */
 	}
 
 	for (i = 0; i < SKBUF_Q_SIZE; i ++) {
@@ -586,8 +556,6 @@ static const struct net_device_ops fpx_netdev_ops = {
 	.ndo_start_xmit		= fpx_enet_start_xmit,
 	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
-	.ndo_tx_timeout		= fpx_timeout,
-	.ndo_do_ioctl		= fpx_enet_ioctl,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller	= fec_poll_controller,
 #endif
@@ -600,7 +568,6 @@ fpx_setup(struct net_device *dev)
 	dev->mtu		= ETH_DATA_LEN;
 	dev->tx_queue_len	= 512;	/* Ethernet wants good queues */
 	dev->flags		|= IFF_POINTOPOINT | IFF_NOARP;
-	dev->ethtool_ops	= &fpx_enet_ethtool_ops;
 	dev->netdev_ops		= &fpx_netdev_ops;
 }
 
@@ -641,10 +608,10 @@ static int __init fpx_init(void)
 	/* do ioremap nocache, Local area, inbound */
 	fep->local_res = request_mem_region(S32_PCI_SMEM, S32_PCI_SMEM_SIZE,
                                     "pcie-local-buff");
-	fep->cfg_ved_l = (struct config_ved*)ioremap_cache(
-		(resource_size_t)S32_PCI_SMEM, (unsigned long)S32_PCI_SMEM_SIZE);
-	printk(KERN_ERR"fep->cfg_ved_l = %p, phy = %llx",
-			fep->cfg_ved_l, virt_to_phys(fep->cfg_ved_l));
+	fep->ctrl_ved_l = (struct control_ved*)ioremap_nocache(
+		(resource_size_t)S32_PCI_SMEM, (unsigned long)sizeof(struct control_ved));
+	fep->received_data_l = (volatile void*)ioremap_cache((resource_size_t)S32_PCI_SMEM + sizeof(struct control_ved), 
+		S32_PCI_SMEM_SIZE - sizeof(struct control_ved));
 	/* set outbound area  */
 	outbound.target_addr = LS_PCI_SMEM;
 	outbound.base_addr = S32V_REMOTE_PCI_BASE;
@@ -655,26 +622,25 @@ static int __init fpx_init(void)
 	/* do ioremap nocache, Remote area, outbound */
 	fep->local_res = request_mem_region(S32V_REMOTE_PCI_BASE, LS_PCI_SMEM_SIZE,
                                     "pcie-remote-buff");
-	fep->cfg_ved_r = (struct config_ved*)ioremap_nocache(
+	fep->ctrl_ved_r = (struct control_ved*)ioremap_nocache(
 		(resource_size_t)S32V_REMOTE_PCI_BASE, (unsigned long)LS_PCI_SMEM_SIZE);
+	fep->received_data_r = (volatile u32*)(fep->ctrl_ved_r + 1);
 
 	ret = register_netdev(ndev);
 	if (ret) {
 		printk(KERN_ERR"Error registering netdevice\n");
 		goto error_register;
 	}
-	memset_io((void *)fep->cfg_ved_l, 0,
-		sizeof(struct config_ved)); /* clear local data */
 
-	__dma_flush_range((const void*)fep->cfg_ved_l, ((const void*)fep->cfg_ved_l) + sizeof(struct config_ved));
 	spin_lock_init(&fep->spinlock);
 	/* exit success */
 	printk(KERN_ERR"Success!\n");
 	goto return_et;
 error_register:
 	netif_napi_del(&fep->napi);
-	iounmap((void*)fep->cfg_ved_l);
-	iounmap((void*)fep->cfg_ved_r);
+	iounmap((void*)fep->ctrl_ved_l);
+	iounmap((void*)fep->received_data_l);
+	iounmap((void*)fep->ctrl_ved_r);
 	iounmap((void*)fep->msi_zone);
 	release_mem_region(S32_PCI_SMEM, S32_PCI_SMEM_SIZE);
 	release_mem_region(S32V_REMOTE_PCI_BASE, LS_PCI_SMEM_SIZE);
@@ -691,8 +657,9 @@ static void __exit fpx_exit(void)
 {
 	struct fpx_enet_private *fep = netdev_priv(s_ndev);
 	netif_napi_del(&fep->napi);
-	iounmap((void*)fep->cfg_ved_l);
-	iounmap((void*)fep->cfg_ved_r);
+	iounmap((void*)fep->ctrl_ved_l);
+	iounmap((void*)fep->received_data_l);
+	iounmap((void*)fep->ctrl_ved_r);
 	release_mem_region(S32_PCI_SMEM, S32_PCI_SMEM_SIZE);
 	release_mem_region(S32V_REMOTE_PCI_BASE, LS_PCI_SMEM_SIZE);
 	unregister_netdev(s_ndev);
