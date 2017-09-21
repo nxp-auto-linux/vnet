@@ -1,0 +1,10 @@
+config VNET_S32
+	tristate "S32V234 platform - virtual ethernet driver support"
+	depends on SOC_S32V234
+	help
+	 Enable or disable virtual ethernet driver support for S32V234 (Treerunner) board. To compile this driver as a module, choose 'M'.
+
+config VNET_LS2
+	tristate "LS2085A platform - virtual ethernet driver support"
+	help
+	 Enable or disable virtual ethernet driver support for LS2085A board. To compile this driver as a module, choose 'M'.

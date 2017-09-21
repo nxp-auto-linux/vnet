@@ -7,7 +7,7 @@
 # published by the Free Software Foundation.
 
 
-obj-m := fpx.o
+obj-$(CONFIG_VNET_LS2) := fpx.o
 PWD := $(shell pwd)
 all:
 	make -C $(KERNEL_DIR) SUBDIRS=$(PWD) modules
