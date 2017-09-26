@@ -19,13 +19,7 @@
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/skbuff.h>
-#include <linux/in.h>
-#include <linux/ip.h>
-#include <net/ip.h>
-#include <linux/tcp.h>
-#include <linux/udp.h>
-#include <linux/icmp.h>
-#include <linux/bitops.h>
+#include <linux/spinlock.h>
 #include <linux/io.h>
 #include <linux/irq.h>
 #include <linux/pci.h>
@@ -40,10 +34,15 @@ extern void __dma_flush_range(const void *, const void *);
 static netdev_tx_t
 fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
-	struct fpx_enet_private *fep = netdev_priv(ndev);
+	struct fpx_enet_private *fep;
+	u64 write_i, read_i;
+	unsigned long flags;
 
-	u64 write_i = fep->ctrl_ved_r->current_write_index;
-	u64 read_i = fep->ctrl_ved_r->current_read_index;
+	fep = netdev_priv(ndev);
+
+	spin_lock_irqsave(&fep->spinlock, flags);
+	write_i = fep->ctrl_ved_r->current_write_index;
+	read_i = fep->ctrl_ved_r->current_read_index;
 
 	if (write_i > (read_i + MAX_NO_BUFFERS)) {
 		/* discard frame */
@@ -94,6 +93,8 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		ndev->stats.tx_packets++;
 		ndev->stats.tx_bytes += skb->len;
 	}
+	spin_unlock_irqrestore(&fep->spinlock, flags);
+
 	dev_kfree_skb_any(skb);	/* kfree skbuf */
 
 	return NETDEV_TX_OK;
@@ -398,6 +399,7 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	/* success */
 	pci_set_drvdata (pdev, ndev);
+	spin_lock_init(&fep->spinlock);
 	printk(KERN_ERR"Success %016llx\n", pdev->resource[0].start);
 	return 0;
 err_register_netdev:

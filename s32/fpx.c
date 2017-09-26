@@ -18,14 +18,7 @@
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/skbuff.h>
-#include <linux/in.h>
-#include <linux/ip.h>
-#include <net/ip.h>
-#include <linux/tcp.h>
-#include <linux/udp.h>
-#include <linux/icmp.h>
 #include <linux/spinlock.h>
-#include <linux/bitops.h>
 #include <linux/io.h>
 #include <linux/irq.h>
 #include <linux/platform_device.h>
@@ -74,14 +67,11 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	// TEST ONLY - don't to dma chaining.
 	while (STS_TX_IDLE != fep->transmiter_status);
 
+	spin_lock_irqsave(&fep->spinlock, flags);
 	write_i = fep->ctrl_ved_r->current_write_index;
 	read_i = fep->ctrl_ved_r->current_read_index;
 
-	spin_lock_irqsave(&fep->spinlock, flags);
-
 	if (STS_TX_IDLE == fep->transmiter_status) {
-		spin_unlock_irqrestore(&fep->spinlock, flags);
-
 		if (write_i > (read_i + MAX_NO_BUFFERS)) {
 #if CHAIN_SUPPORT
 			fep->sk_buff_queue_tx[fep->tail_totx & (SKBUF_Q_SIZE - 1)] = skb;
@@ -166,14 +156,13 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		if ((fep->tail_totx - fep->head_totx) < SKBUF_Q_SIZE) {
 			fep->sk_buff_queue_tx[fep->tail_totx & (SKBUF_Q_SIZE - 1)] = skb;
 			fep->tail_totx ++; // add sk_buff to tail
-			spin_unlock_irqrestore(&fep->spinlock, flags);
 		}
 		else {
-			spin_unlock_irqrestore(&fep->spinlock, flags);
 			dev_kfree_skb_any(skb);
 			ndev->stats.tx_dropped++;
 		}
 	}
+	spin_unlock_irqrestore(&fep->spinlock, flags);
 	return NETDEV_TX_OK;
 }
 
