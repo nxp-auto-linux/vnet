@@ -427,6 +427,33 @@ fpx_enet_open(struct net_device *ndev)
 	}
 	else {
 		struct s32v_outbound_region outbound;
+
+		/* MSI outbound area */
+		outbound.target_addr = readl(fep->pp->dbi_base + 0x54);
+
+		if (!outbound.target_addr) {
+			printk(KERN_ERR"Msi target not ready %08llx\n", outbound.target_addr);
+			return -EINVAL;
+		}
+
+		outbound.base_addr = S32_PCI_MSI_MEM;
+		outbound.size = S32_PCI_MSI_SIZE;
+		outbound.region = 3;
+		outbound.region_type = 0; /* memory */
+		s32v_pcie_setup_outbound(&outbound);
+		/* do ioremap nocache, Remote area, outbound */
+		fep->remote_res = request_mem_region(S32_PCI_MSI_MEM, S32_PCI_MSI_SIZE,
+			"pcie-msi-buff");
+		fep->msi_zone = (volatile int *)ioremap_nocache(
+			(resource_size_t)S32_PCI_MSI_MEM, (unsigned long)S32_PCI_MSI_SIZE);
+
+		/* ENABLE MSI for DMA write */
+		writel(S32_PCI_MSI_MEM, fep->pp->dbi_base + 0x9d0);
+		writel(0, fep->pp->dbi_base + 0x9d4);
+		writel(S32_PCI_MSI_MEM, fep->pp->dbi_base + 0x9d8);
+		writel(0, fep->pp->dbi_base + 0x9dc);
+		writel(0, fep->pp->dbi_base + 0x9e0);
+
 		fep->rx_sk_buff_index = 0;
 		fep->ctrl_ved_l->current_write_index = 0;
 		fep->ctrl_ved_l->current_read_index = 0;
@@ -456,25 +483,7 @@ fpx_enet_open(struct net_device *ndev)
 		/* avoid pcie driver crash */
 		fep->pp->ops->send_signal_to_user = NULL;
 
-		/* MSI outbound area */
-		outbound.target_addr = readl(fep->pp->dbi_base + 0x54);
-		outbound.base_addr = S32_PCI_MSI_MEM;
-		outbound.size = S32_PCI_MSI_SIZE;
-		outbound.region = 3;
-		outbound.region_type = 0; /* memory */
-		s32v_pcie_setup_outbound(&outbound);
-		/* do ioremap nocache, Remote area, outbound */
-		fep->remote_res = request_mem_region(S32_PCI_MSI_MEM, S32_PCI_MSI_SIZE,
-			"pcie-msi-buff");
-		fep->msi_zone = (volatile int *)ioremap_nocache(
-			(resource_size_t)S32_PCI_MSI_MEM, (unsigned long)S32_PCI_MSI_SIZE);
-
-		/* ENABLE MSI for DMA write */
-		writel(S32_PCI_MSI_MEM, fep->pp->dbi_base + 0x9d0);
-		writel(0, fep->pp->dbi_base + 0x9d4);
-		writel(S32_PCI_MSI_MEM, fep->pp->dbi_base + 0x9d8);
-		writel(0, fep->pp->dbi_base + 0x9dc);
-		writel(0, fep->pp->dbi_base + 0x9e0);
+		
 #if MSI_WORKAROUND
 		/* configure GPIO S32V2LS_INT_PIN to signal LS2, workaround MSI */
 		retval = gpio_request(S32V2LS_INT_PIN, "S32V_LS2_INT");
