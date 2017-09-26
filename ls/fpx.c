@@ -1,6 +1,6 @@
 /*
  * Freescale PCI Express virtual network driver for LayerScape 
- * Copyright (C) 2017 NXP
+ * Copyright 2017 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -36,7 +36,6 @@
 #define DRIVER_NAME	"fpx"
 
 extern void __dma_flush_range(const void *, const void *);
-extern void __inval_cache_range(const void *, const void *);
 
 static netdev_tx_t
 fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
@@ -89,7 +88,6 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		}
 		write_i ++;
 		fep->ctrl_ved_r->current_write_index = write_i;
-		wmb();
 		fep->level ^= 1;
 		gpio_set_value(LS2S32V_INT_PIN, fep->level);
 
@@ -123,9 +121,7 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 		unsigned int buf_len;
 		pkts ++;
 		/* get the buffer length and restore the data */
-		__inval_cache_range((const void*)tmp_data, (const void*)tmp_data + 4);
 		buf_len = *(unsigned int*)tmp_data;
-		__inval_cache_range((const void*)tmp_data + 4, (const void*)tmp_data + 4 + buf_len);
 
 		if (MAX_BUFFER_SIZE > buf_len) {
 
@@ -214,13 +210,11 @@ fpx_enet_open(struct net_device *ndev)
 {
 	int retval = 0;
 	struct fpx_enet_private *fep = netdev_priv(ndev);
-#if QDMA_SUPPORT
 	fep->qdma_regs = (unsigned int*)ioremap_nocache(QDMA_BASE, QDMA_REG_SIZE);
 	if (!fep->qdma_regs) {
 		printk(KERN_ERR"cannot map qdma registers\n");
 		return -1;
 	}
-#endif
 
 	/* clear local data */
 	fep->ctrl_ved_l->current_write_index = 0;
@@ -290,9 +284,7 @@ fpx_enet_close(struct net_device *ndev)
 #else
 	free_irq(fep->pci_dev->irq, ndev);
 #endif
-#if QDMA_SUPPORT
 	iounmap((void*)fep->qdma_regs);
-#endif
 	if (netif_device_present(ndev)) {
 		napi_disable(&fep->napi);
 		netif_tx_disable(ndev);
@@ -316,7 +308,7 @@ static void
 fpx_setup(struct net_device *dev)
 {
 	dev->mtu		    = ETH_DATA_LEN;
-	dev->tx_queue_len	= 512;	/* Ethernet wants good queues */
+	dev->tx_queue_len	= SKBUF_Q_SIZE;	/* Ethernet wants good queues */
 	dev->flags		    |= IFF_POINTOPOINT | IFF_NOARP;
 	dev->netdev_ops		= &fpx_netdev_ops;
 }
@@ -354,41 +346,32 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	ret = pci_enable_device(pdev);
 	if (ret) {
 		printk(KERN_ERR"Error enabling PCI device\n");
-		free_netdev(ndev);
-		return ret;
+		goto err_pci_enable_device;
 	}
 
 	ret = pci_request_regions(pdev, DRIVER_NAME);
 	if (ret) {
 		printk(KERN_ERR"Error requesting region\n");
-		free_netdev(ndev);
-		pci_disable_device(pdev);
-		return ret;
+		goto err_pci_request_regions;
 	}
 
 	/////////////////////////////////////////////////
 	io_len = pci_resource_len(pdev, 0);		//read bar 0
-
 	ret = pci_resource_flags(pdev, 0);
 	printk(KERN_ERR"bar0 len = %lu, %08x\n", io_len, ret);
 
-
 	if (!(ret & IORESOURCE_MEM)) {
 		printk(KERN_ERR"Bad PCI resource\n");
-		pci_release_regions(pdev);
-		free_netdev(ndev);
-		pci_disable_device(pdev);
-		return -ENODEV;
+		ret = -ENODEV;
+		goto err_bad_pci_resource;
 	}
 	/* alloc memory */
-	fep->local_res_c = request_mem_region(LS_PCI_SMEM, sizeof(struct control_ved),
+	fep->local_res = request_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE,
 			"pcie-local-ctrl");
 
-	fep->ctrl_ved_l = (struct control_ved*)ioremap_nocache(
+	fep->ctrl_ved_l = (struct control_ved*)ioremap_cache(
 		LS_PCI_SMEM, (unsigned long)sizeof(struct control_ved));
 
-	fep->local_res_d = request_mem_region(LS_PCI_SMEM + sizeof(struct control_ved),
-		LS_PCI_SMEM_SIZE - sizeof(struct control_ved), "pcie-local-ctrl");
 	fep->received_data_l = (volatile u32*)ioremap_cache(
 		(resource_size_t)(LS_PCI_SMEM + sizeof(struct control_ved)),
 		LS_PCI_SMEM_SIZE - sizeof(struct control_ved));
@@ -402,11 +385,7 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	if (ret) {
 		printk(KERN_ERR"Error enabling PCI MSI\n");
-		pci_iounmap (pdev, fep->ctrl_ved_r);
-		pci_release_regions(pdev);
-		free_netdev(ndev);
-		pci_disable_device(pdev);
-		return ret;
+		goto err_pci_enable_msi;
 	}
 
 	netif_napi_add(ndev, &fep->napi, fpx_enet_rx_napi, NAPI_POLL_WEIGHT);
@@ -414,39 +393,46 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (ret) {
 		printk(KERN_ERR"Error registering netdevice\n");
 		netif_napi_del(&fep->napi);
-		pci_iounmap (pdev, fep->ctrl_ved_r);
-		pci_disable_msi(pdev);
-		pci_release_regions(pdev);
-		free_netdev(ndev);
-		pci_disable_device(pdev);
-		return ret;
+		goto err_register_netdev;
 	}
 
+	/* success */
 	pci_set_drvdata (pdev, ndev);
-
 	printk(KERN_ERR"Success %016llx\n", pdev->resource[0].start);
 	return 0;
+err_register_netdev:
+	netif_napi_del(&fep->napi);
+	pci_disable_msi(pdev);
+err_pci_enable_msi:
+	iounmap((void*)fep->ctrl_ved_l);
+	iounmap((void*)fep->received_data_l);
+	release_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
+	pci_iounmap(pdev, fep->ctrl_ved_r);
+err_bad_pci_resource:
+	pci_release_regions(pdev);
+err_pci_request_regions:
+	pci_disable_device(pdev);
+err_pci_enable_device:
+	free_netdev(ndev);
+	return ret;
 }
 
 static void fpx_remove(struct pci_dev *pdev)
 {
-	struct net_device *ndev = pci_get_drvdata (pdev);
+	struct net_device *ndev = pci_get_drvdata(pdev);
 	struct fpx_enet_private *fep = netdev_priv(ndev);
 
-	printk(KERN_ERR"remove device\n");
+	printk(KERN_ERR"Remove fpx device.\n");
 	netif_napi_del(&fep->napi);
-	pci_iounmap(pdev, (void*)fep->ctrl_ved_r);
+	pci_disable_msi(pdev);
+	unregister_netdev(ndev);
 	iounmap((void*)fep->ctrl_ved_l);
 	iounmap((void*)fep->received_data_l);
-	release_mem_region(LS_PCI_SMEM, sizeof(struct control_ved));
-	release_mem_region(LS_PCI_SMEM + sizeof(struct control_ved),
-		LS_PCI_SMEM_SIZE - sizeof(struct control_ved));
-
+	release_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
+	pci_iounmap(pdev, fep->ctrl_ved_r);
 	pci_release_regions(pdev);
-	unregister_netdev(ndev);
-	pci_disable_msi(pdev);
-	free_netdev(ndev);
 	pci_disable_device(pdev);
+	free_netdev(ndev);
 }
 
 static const struct pci_device_id fpx_ids[] = {

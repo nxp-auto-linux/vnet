@@ -1,6 +1,6 @@
 /*
  * Freescale PCI Express virtual network driver for S32V234 
- * Copyright (C) 2017 NXP
+ * Copyright 2017 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -566,7 +566,7 @@ static void
 fpx_setup(struct net_device *dev)
 {
 	dev->mtu		= ETH_DATA_LEN;
-	dev->tx_queue_len	= 512;	/* Ethernet wants good queues */
+	dev->tx_queue_len	= SKBUF_Q_SIZE;	/* Ethernet wants good queues */
 	dev->flags		|= IFF_POINTOPOINT | IFF_NOARP;
 	dev->netdev_ops		= &fpx_netdev_ops;
 }
@@ -641,10 +641,8 @@ error_register:
 	iounmap((void*)fep->ctrl_ved_l);
 	iounmap((void*)fep->received_data_l);
 	iounmap((void*)fep->ctrl_ved_r);
-	iounmap((void*)fep->msi_zone);
 	release_mem_region(S32_PCI_SMEM, S32_PCI_SMEM_SIZE);
 	release_mem_region(S32V_REMOTE_PCI_BASE, LS_PCI_SMEM_SIZE);
-	release_mem_region(S32_PCI_MSI_MEM, S32_PCI_MSI_SIZE);
 	unregister_netdev(ndev);
 	free_netdev(ndev);
 

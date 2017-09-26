@@ -1,6 +1,6 @@
 /*
  * Freescale PCI Express virtual network driver for LayerScape 
- * Copyright (C) 2017 NXP
+ * Copyright 2017 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -25,14 +25,11 @@
 #define S32V_REMOTE_PCI_BASE	0x72000000	/* Local, S32V */
 #define LS_REMOTE_PCI_BASE		0x0000003840000000	/* Local, LS */
 
-#define QDMA_SUPPORT        	1
 #define MSI_WORKAROUND			0
 
 
-#if QDMA_SUPPORT
-	#define QDMA_BASE			0x8390100
-	#define QDMA_REG_SIZE		0x100
-#endif
+#define QDMA_BASE			0x8390100
+#define QDMA_REG_SIZE		0x100
 
 #define LS2S32V_INT_PIN			434
 #if MSI_WORKAROUND
@@ -66,16 +63,13 @@ struct fpx_enet_private {
 	struct net_device *netdev;
 	struct napi_struct napi;
 
-	struct resource *local_res_c;
-	struct resource *local_res_d;
+	struct resource *local_res;
 	struct resource *remote_res;
 
 	struct sk_buff *sk_buff_queue_rx[SKBUF_Q_SIZE];
 	int rx_sk_buff_index;
 	u32 level;
-#if QDMA_SUPPORT
 	volatile u32* qdma_regs;
-#endif
 #if MSI_WORKAROUND
 	int irq;
 #endif
