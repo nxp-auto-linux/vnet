@@ -1,6 +1,6 @@
 /*
  * Freescale PCI Express virtual network driver for S32V234 
- * Copyright (C) 2017 NXP
+ * Copyright 2017 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -29,7 +29,7 @@
 #define S32_PCI_MSI_SIZE		0x10000		/* 64 KB */
 #define S32_PCI_MSI_MEM			0x72FB0000
 
-
+#define CHAIN_SUPPORT			0
 
 /* the MSI does not work on BlueBox Mini. As workaround,
  * the driver uses a GPIO to signal LS2 instead of MSI
@@ -49,34 +49,34 @@ struct dma_desc {
 	unsigned int dar_high;
 };
 
-#define OFFSET_TO_DATA		0x3040
 
-struct config_ved
+struct control_ved
 {
-	volatile unsigned int current_write_index;
-	volatile unsigned int val[3];
-	volatile struct dma_desc d_tx[MAX_NO_BUFFERS + 2];
-	volatile unsigned int received_data[0];
+	volatile u64 current_write_index;
+	volatile u64 current_read_index;
+	volatile u64 val[6];
 };
 
-
+#define OFFSET_TO_DATA		sizeof(struct control_ved)
 struct fpx_enet_private {
 	/* Hardware registers of the fpx device */
 	struct pcie_port *pp;
-	struct config_ved *cfg_ved_l; /* cfg + data virtual ethernet device, local */
-	struct config_ved *cfg_ved_r; /* cfg + data virtual ethernet device, remote */
+	struct control_ved *ctrl_ved_l; /* control virtual ethernet device, local */
+	struct control_ved *ctrl_ved_r; /* control virtual ethernet device, remote */
 	struct net_device *netdev;
 	struct napi_struct napi;
 
-	int head_totx;
-	int tail_totx;
+	u64 head_totx;
+	u64 tail_totx;
+	volatile unsigned int transmiter_status;
 	int tail_txinprogress;
+	spinlock_t spinlock;
+	volatile struct dma_desc d_tx[MAX_NO_BUFFERS + 2];
+
 	struct sk_buff *sk_buff_queue_tx[SKBUF_Q_SIZE];
 	struct sk_buff *sk_buff_queue_tx_inprogress[SKBUF_Q_SIZE];
-	volatile unsigned int transmiter_status;
 	struct resource *local_res;
 	struct resource *remote_res;
-	spinlock_t spinlock;
 	volatile int* msi_zone;
 	struct sk_buff *sk_buff_queue_rx[SKBUF_Q_SIZE];
 	int rx_sk_buff_index;
@@ -84,8 +84,8 @@ struct fpx_enet_private {
 #if MSI_WORKAROUND
 	unsigned int level;
 #endif
-	unsigned int remote_write_index;
-	unsigned int current_read_index;
+	volatile void* received_data_l;
+	volatile void* received_data_r;
 };
 
 #endif /* FPX_H */

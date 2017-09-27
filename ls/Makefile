@@ -1,6 +1,6 @@
 #
 # Freescale PCI Express virtual network driver for LayerScape 
-# Copyright (C) 2017 NXP
+# Copyright 2017 NXP
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License version 2 as
