@@ -176,8 +176,8 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 			ndev->stats.rx_errors ++;
 		}
 		read_i ++;
-		write_i = fep->ctrl_ved_l->current_write_index;	/* read new write index */
-		fep->ctrl_ved_l->current_read_index = read_i;	/* update read index */
+		write_i = fep->ctrl_ved_l->current_write_index;	/* read the new write index */
+		fep->ctrl_ved_l->current_read_index = read_i;	/* update the read index */
 		if (read_i & ((MAX_NO_BUFFERS - 1))) {
 			tmp_data += MAX_BUFFER_SIZE;
 		}
@@ -309,7 +309,7 @@ static void
 fpx_setup(struct net_device *dev)
 {
 	dev->mtu		    = ETH_DATA_LEN;
-	dev->tx_queue_len	= SKBUF_Q_SIZE;	/* Ethernet wants good queues */
+	dev->tx_queue_len	= SKBUF_Q_SIZE;
 	dev->flags		    |= IFF_POINTOPOINT | IFF_NOARP;
 	dev->netdev_ops		= &fpx_netdev_ops;
 }

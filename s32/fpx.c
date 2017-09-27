@@ -73,12 +73,7 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 
 	if (STS_TX_IDLE == fep->transmiter_status) {
 		if (write_i > (read_i + MAX_NO_BUFFERS)) {
-#if CHAIN_SUPPORT
-			fep->sk_buff_queue_tx[fep->tail_totx & (SKBUF_Q_SIZE - 1)] = skb;
-			fep->tail_totx ++; // add sk_buff to tail
-#else
 			dev_kfree_skb_any(skb);
-#endif
 		}
 		else {
 			u64 dest_addr;
@@ -114,7 +109,6 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 			*(int*)(start) = skb->len;
 
 			/* flush cache */
-			wmb();
 			__dma_flush_range((const void*)start, (const void*)end);
 
 			ndev->stats.tx_packets++;
@@ -146,7 +140,6 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 			start = (void*)&fep->d_tx[0];
 			end = (void*)&fep->d_tx[3];
 
-			wmb();
 			__dma_flush_range((const void*)start, (const void*)end);
 			fep->transmiter_status = STS_TX_INPROGRESS;
 			dw_start_dma_llw(fep->pp, virt_to_phys(fep->d_tx));
@@ -184,114 +177,7 @@ void fpx_irq_callback(u32 type)
 	} while (i < fep->tail_txinprogress);
 	fep->tail_txinprogress = 0;
 
-	/* should we do other TX */
-	if (fep->head_totx != fep->tail_totx) {
-#if CHAIN_SUPPORT
-		int start_frame = fep->head_totx;
-		int frame_to_tx = (fep->tail_totx - start_frame);
-
-		start_frame &= (SKBUF_Q_SIZE - 1);
-
-		{	/* prepare TX */
-			int index = 0;
-			unsigned int write_i;
-			unsigned long long int dest_addr;
-			void* start;
-			void* end;
-
-			write_i = fep->remote_write_index;
-
-			dest_addr = 
-				(unsigned long long int)(S32V_REMOTE_PCI_BASE
-					+ OFFSET_TO_DATA + ((write_i & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE));
-
-			while (frame_to_tx) {
-
-				if (!fep->sk_buff_queue_tx[start_frame]) BUG();
-
-				frame_to_tx --;
-				/* prepare DMA transfer tmpTx*/
-				fep->d_tx[index].chan_ctrl = 1;
-				/* added the length of buffer in front of the data buffer */
-				fep->d_tx[index].size =
-					fep->sk_buff_queue_tx[start_frame]->len + sizeof(int);
-
-				start = fep->sk_buff_queue_tx[start_frame]->data - sizeof(int);
-				end = start + fep->sk_buff_queue_tx[start_frame]->len + sizeof(int);
-				fep->d_tx[index].sar_low =
-					lower_32_bits(virt_to_phys(start));
-				fep->d_tx[index].sar_high =
-					upper_32_bits(virt_to_phys(start));
-
-				fep->d_tx[index].dar_low =
-					lower_32_bits(dest_addr);
-				fep->d_tx[index].dar_high =
-					upper_32_bits(dest_addr);
-				/* update inband length, write over unused ethernet header */
-				*(int*)(start) = fep->sk_buff_queue_tx[start_frame]->len;
-
-				/* flush cache */
-				wmb();
-				__dma_flush_range((const void*)start, (const void*)end);
-				
-				s_ndev->stats.tx_packets++;
-				s_ndev->stats.tx_bytes += fep->sk_buff_queue_tx[start_frame]->len;
-
-				/* add current sk_buf to in proggress in order to free skbuff after
-					transmision complete */
-				fep->sk_buff_queue_tx_inprogress[fep->tail_txinprogress ++] = fep->sk_buff_queue_tx[start_frame];
-				fep->sk_buff_queue_tx[start_frame] = NULL;
-
-				start_frame ++;
-				if (SKBUF_Q_SIZE == start_frame) {
-					start_frame = 0;
-					dest_addr = (unsigned long long int)(S32V_REMOTE_PCI_BASE
-						+ OFFSET_TO_DATA);
-				}
-				else {
-					dest_addr += MAX_BUFFER_SIZE;
-				}
-
-				fep->head_totx ++;
-				index ++;
-			}
-
-			fep->remote_write_index = index + write_i;
-
-			/* update descriptor for write index */
-			fep->ctrl_ved_l->val[0] = index + write_i;
-			fep->d_tx[index].chan_ctrl = 0x19; /* LIE + RIE */
-			fep->d_tx[index].size = sizeof(int);
-			fep->d_tx[index].sar_low =
-				lower_32_bits(S32_PCI_SMEM + sizeof(int));
-			fep->d_tx[index].sar_high =
-				upper_32_bits(S32_PCI_SMEM + sizeof(int));
-
-			fep->d_tx[index].dar_low =
-				lower_32_bits(S32V_REMOTE_PCI_BASE);
-			fep->d_tx[index].dar_high =
-				upper_32_bits(S32V_REMOTE_PCI_BASE);
-
-			fep->d_tx[index + 1].chan_ctrl = 0x6; /* LLP */
-			fep->d_tx[index + 1].size = 0;
-			fep->d_tx[index + 1].sar_low =
-				lower_32_bits(S32_PCI_SMEM + 4 * sizeof(int));
-			fep->d_tx[index + 1].sar_high =
-				upper_32_bits(S32_PCI_SMEM + 4 * sizeof(int));
-			/* do TX */
-			/* Program DMA regs for LL mode */
-			start = (void*)&fep->val[0];
-			end = (void*)&fep->d_tx[index + 2];
-			wmb();
-			__dma_flush_range((const void*)start, (const void*)end);
-
-			dw_start_dma_llw(fep->pp, virt_to_phys(fep->d_tx));
-		}
-#endif
-	}
-	else {
-		fep->transmiter_status = STS_TX_IDLE;
-	}
+	fep->transmiter_status = STS_TX_IDLE;
 }
 
 static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
@@ -374,8 +260,8 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 			ndev->stats.rx_errors ++;
 		}
 		read_i ++;
-		write_i = fep->ctrl_ved_l->current_write_index; /* new write index read */
-		fep->ctrl_ved_l->current_read_index = read_i;
+		write_i = fep->ctrl_ved_l->current_write_index; /* read the new write index */
+		fep->ctrl_ved_l->current_read_index = read_i;	/* update the read index */
 		if (read_i & ((MAX_NO_BUFFERS - 1))) {
 			tmp_data += MAX_BUFFER_SIZE;
 		}
@@ -421,7 +307,8 @@ fpx_enet_open(struct net_device *ndev)
 		outbound.target_addr = readl(fep->pp->dbi_base + 0x54);
 
 		if (!outbound.target_addr) {
-			printk(KERN_ERR"Msi target not ready %08llx\n", outbound.target_addr);
+			printk(KERN_ERR
+				"PCIe Root-Complex(RC) is not ready yet. Wait until Linux on the RC side enables the PCIe module.\n");
 			return -EINVAL;
 		}
 
@@ -564,7 +451,7 @@ static void
 fpx_setup(struct net_device *dev)
 {
 	dev->mtu		= ETH_DATA_LEN;
-	dev->tx_queue_len	= SKBUF_Q_SIZE;	/* Ethernet wants good queues */
+	dev->tx_queue_len	= SKBUF_Q_SIZE;
 	dev->flags		|= IFF_POINTOPOINT | IFF_NOARP;
 	dev->netdev_ops		= &fpx_netdev_ops;
 }
