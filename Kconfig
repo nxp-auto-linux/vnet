@@ -1,0 +1,4 @@
+config VETH_LS2
+	tristate "LS2085A platform - virtual ethernet driver support"
+	help
+	 Enable or disable virtual ethernet driver support for LS2085A board. To compile this driver as a module, choose 'M'.
