@@ -439,6 +439,9 @@ static void fpx_remove(struct pci_dev *pdev)
 
 static const struct pci_device_id fpx_ids[] = {
 {
+	PCI_DEVICE(0x1957, 0x4000)
+},
+{
 	PCI_DEVICE(0x1957, 0x4001)
 },
 {0, }
