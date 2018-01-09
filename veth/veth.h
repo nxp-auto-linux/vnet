@@ -23,16 +23,10 @@
 #define S32V_REMOTE_PCI_BASE	0x72000000	/* Local, S32V */
 #define LS_REMOTE_PCI_BASE		0x0000003840000000	/* Local, LS */
 
-#define MSI_WORKAROUND			0
-
-
 #define QDMA_BASE			0x8390100
 #define QDMA_REG_SIZE		0x100
 
 #define LS2S32V_INT_PIN			434
-#if MSI_WORKAROUND
-	#define S32V2LS_INT_PIN		435
-#endif
 
 
 struct dma_desc {
@@ -70,9 +64,7 @@ struct fpx_enet_private {
 	int rx_sk_buff_index;
 	u32 level;
 	volatile u32* qdma_regs;
-#if MSI_WORKAROUND
-	int irq;
-#endif
+
 	volatile void* received_data_l;
 	volatile void* received_data_r;
 };

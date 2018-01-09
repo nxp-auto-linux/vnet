@@ -12,11 +12,10 @@
 #define LS_PCI_SMEM		0x83A0000000ULL	/* Remote, LS */
 #define LS_PCI_SMEM_SIZE	0x00400000	/* 4 MB */
 
-#define S32_PCI_SMEM		0xfd000000
+#define QDMA_BASE		0x8390100
+#define QDMA_REG_SIZE		0x100
 
-#define S32_PCI_SMEM_SIZE	0x00400000	/* 4 MB */
-#define S32_PCI_MSI_MEM		(S32_PCI_SMEM + S32_PCI_SMEM_SIZE)
-#define S32_PCI_MSI_SIZE	0x1000		/* 4 KB */
+#define LS2S32V_INT_PIN		434	/* GPIO interrupt pin */
 
 /* TODO: test w/o volatile */
 struct nxp_pci_shm {
@@ -26,21 +25,31 @@ struct nxp_pci_shm {
 	volatile void* data;
 };
 
-struct nxp_pci_priv {
+/**
+ * struct nxp_pdev_priv - NXP generic PCI device
+ *
+ * @pci_dev:	PCI device structure
+ * @upper_dev:	specific device built on nxp_pdev (i.e., net dev, tty dev, etc)
+ *
+ * Private member priv_data is populated by init function with internal data
+ * needed by transport device for read/write operations.
+ */
+struct nxp_pdev_priv {
 	/* Hardware registers of the fpx device */
 	struct pci_dev *pci_dev;
-
-	spinlock_t spinlock;
+	void *upper_dev;
 
 	volatile u32* qdma_regs;
-#if MSI_WORKAROUND
-	int irq;
-#endif
+	u32 gpio_level;
+
 	struct nxp_pci_shm *local_shm;
 	struct nxp_pci_shm *remote_shm;
 };
 
-void nxp_pci_dev_init(struct pci_dev *pdev);
-void nxp_pci_dev_free(struct pci_dev *pdev);
+int nxp_pdev_init(struct pci_dev *pdev, void *upper_dev);
+void nxp_pdev_free(struct pci_dev *pdev);
+void *nxp_pdev_get_upper_dev(struct pci_dev *pdev);
+
+int nxp_
 
 #endif /* DRIVERS_NET_VPCIE_VPCIE_VPCIE_H_ */

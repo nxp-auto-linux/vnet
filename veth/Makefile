@@ -6,10 +6,12 @@
 # published by the Free Software Foundation.
 
 
-obj-$(CONFIG_VETH_LS2) := veth.o
+obj-$(CONFIG_VETH_LS2) += nxp-veth.o
+
+nxp-veth-objs := veth.o nxp-pci.o
+
 PWD := $(shell pwd)
 all:
 	make -C $(KERNEL_DIR) SUBDIRS=$(PWD) modules
 clean:
 	make -C $(KERNEL_DIR) SUBDIRS=$(PWD) clean
-

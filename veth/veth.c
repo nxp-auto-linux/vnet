@@ -24,13 +24,14 @@
 #include <asm/cacheflush.h>
 #include <linux/gpio.h>
 #include "veth.h"
+#include "nxp-pci.h"
 
 #define DRIVER_NAME	"fpx"
 
 extern void __dma_flush_range(const void *, const void *);
 
 static netdev_tx_t
-fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
+fpx_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct fpx_enet_private *fep;
 	u64 write_i, read_i;
@@ -194,7 +195,7 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 	return pkts;
 }
 
-static irqreturn_t fpx_interrupt (int irq, void *dev_instance)
+static irqreturn_t fpx_interrupt(int irq, void *dev_instance)
 {
 	struct net_device *ndev = (struct net_device *) dev_instance;
 	struct fpx_enet_private *fep = netdev_priv(ndev);
@@ -207,19 +208,18 @@ static irqreturn_t fpx_interrupt (int irq, void *dev_instance)
 
 
 static int
-fpx_enet_open(struct net_device *ndev)
+fpx_open(struct net_device *ndev)
 {
 	int retval = 0;
 	struct fpx_enet_private *fep = netdev_priv(ndev);
 
-	printk(KERN_ERR"fpx_enet_open()\n");
+	printk(KERN_ERR"fpx_open()\n");
 
 	/* clear local data */
 	fep->ctrl_ved_l->current_write_index = 0;
 	fep->ctrl_ved_l->current_read_index = 0;
 
 	fep->rx_sk_buff_index = 0;
-
 	for (retval = 0; retval < SKBUF_Q_SIZE; retval ++) {
 		struct sk_buff *sk = __netdev_alloc_skb_ip_align(ndev, MAX_BUFFER_SIZE, GFP_KERNEL); /* max ethernet frame length */
 		if (sk) {
@@ -231,59 +231,20 @@ fpx_enet_open(struct net_device *ndev)
 		}
 	}
 
-#if !(MSI_WORKAROUND)
-	if (request_irq(fep->pci_dev->irq, fpx_interrupt, IRQF_SHARED, ndev->name, ndev)) {
-		printk(KERN_ERR"failed to register interrupt %d\n", fep->pci_dev->irq);
-	}
-#endif
 	napi_enable(&fep->napi);
 	netif_tx_start_all_queues(ndev);
 
-	device_set_wakeup_enable(&ndev->dev, 0);
-
-	fep->level = 0;
-	retval = gpio_request(LS2S32V_INT_PIN, "LS2_S32V_INT");
-	if (retval) printk(KERN_ERR"Cannot reserve GPIO LS2S32V_INT_PIN\n");
-	retval = gpio_direction_output(LS2S32V_INT_PIN, 0);
-	if (retval) printk(KERN_ERR"Cannot configure GPIO LS2S32V_INT_PIN as output\n");
-
-#if MSI_WORKAROUND
-	/* Workaround MSI */
-	retval = gpio_request(S32V2LS_INT_PIN, "S32V_LS2_INT");
-	retval = gpio_direction_input(S32V2LS_INT_PIN);
-	retval = gpio_to_irq(S32V2LS_INT_PIN);
-	if (retval < 0) {
-		printk(KERN_ERR"Cannot setup IRQ for GPIO S32V2LS_INT_PIN\n");
-	}
-	else {
-		if (request_irq(retval, fpx_interrupt, IRQF_TRIGGER_FALLING | IRQF_TRIGGER_RISING, ndev->name, ndev)) {
-			printk(KERN_ERR"failed to register interrupt %d\n", retval);
-		}
-		else {
-			fep->irq = retval;
-			printk(KERN_ERR"register interrupt %d\n", retval);
-		}
-	}
-#endif
 	return 0;
 }
 
 static int
-fpx_enet_close(struct net_device *ndev)
+fpx_close(struct net_device *ndev)
 {
 	int i;
 	struct fpx_enet_private *fep = netdev_priv(ndev);
 
-	printk(KERN_ERR"fpx_enet_close()\n");
+	printk(KERN_ERR"fpx_close()\n");
 
-	gpio_free(LS2S32V_INT_PIN);
-#if MSI_WORKAROUND
-	/* Workaround MSI */
-	gpio_free(S32V2LS_INT_PIN);
-	free_irq(fep->irq, ndev);
-#else
-	free_irq(fep->pci_dev->irq, ndev);
-#endif
 	if (netif_device_present(ndev)) {
 		napi_disable(&fep->napi);
 		netif_tx_disable(ndev);
@@ -294,14 +255,14 @@ fpx_enet_close(struct net_device *ndev)
 
 	return 0;
 }
+
 static const struct net_device_ops fpx_netdev_ops = {
-	.ndo_open		= fpx_enet_open,
-	.ndo_stop		= fpx_enet_close,
-	.ndo_start_xmit		= fpx_enet_start_xmit,
+	.ndo_open		= fpx_open,
+	.ndo_stop		= fpx_close,
+	.ndo_start_xmit		= fpx_start_xmit,
 	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
 };
-
 
 static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
@@ -310,7 +271,7 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	int ret = 0;
 	unsigned long io_len;
 
-	printk(KERN_ERR"fpx_probe v1.1()\n");
+	printk(KERN_ERR"fpx_probe v1.2()\n");
 	printk(KERN_ERR"rc v2 fpx_probe vendor = %04x, dev = %04x\n", pdev->vendor,
 			pdev->device);
 
@@ -339,56 +300,81 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	fep->netdev = ndev;
 	fep->pci_dev = pdev;
 
-	ret = pci_enable_device(pdev);
+//	ret = pci_enable_device(pdev);
+//	if (ret) {
+//		printk(KERN_ERR"Error enabling PCI device\n");
+//		goto err_pci_enable_device;
+//	}
+//
+//	ret = pci_request_regions(pdev, DRIVER_NAME);
+//	if (ret) {
+//		printk(KERN_ERR"Error requesting region\n");
+//		goto err_pci_request_regions;
+//	}
+//
+//	/////////////////////////////////////////////////
+//	io_len = pci_resource_len(pdev, 0);		//read bar 0
+//	ret = pci_resource_flags(pdev, 0);
+//	printk(KERN_ERR"bar0 len = %lu, %08x\n", io_len, ret);
+//
+//	if (!(ret & IORESOURCE_MEM)) {
+//		printk(KERN_ERR"Bad PCI resource\n");
+//		ret = -ENODEV;
+//		goto err_bad_pci_resource;
+//	}
+//	/* alloc memory */
+//	fep->local_res = request_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE,
+//			"pcie-local-ctrl");
+//
+//	fep->ctrl_ved_l = (struct control_ved*)ioremap_cache(
+//		LS_PCI_SMEM, (unsigned long)sizeof(struct control_ved));
+//
+//	fep->received_data_l = (volatile u32*)ioremap_cache(
+//		(resource_size_t)(LS_PCI_SMEM + sizeof(struct control_ved)),
+//		LS_PCI_SMEM_SIZE - sizeof(struct control_ved));
+//
+//	fep->ctrl_ved_r = (struct control_ved*)pci_iomap(pdev, 0, io_len);
+//	fep->received_data_r = (volatile void*)(fep->ctrl_ved_r + 1);
+//
+//	pci_set_master (pdev);
+//	ret = pci_enable_msi(pdev);
+//	if (ret) {
+//		printk(KERN_ERR"Error enabling PCI MSI\n");
+//		goto err_pci_enable_msi;
+//	}
+//
+//	/* init qdma for tx */
+//	fep->qdma_regs = (unsigned int*)ioremap_nocache(QDMA_BASE, QDMA_REG_SIZE);
+//	if (!fep->qdma_regs) {
+//		printk(KERN_ERR"cannot map qdma registers\n");
+//		ret = -ENOMEM;
+//		goto err_init_qdma;
+//	}
+//
+//	/* init tx gpio signaling interrupt */
+//	fep->level = 0;
+//	ret = gpio_request(LS2S32V_INT_PIN, "LS2_S32V_INT");
+//	if (ret) {
+//		printk(KERN_ERR"Cannot reserve GPIO LS2S32V_INT_PIN\n");
+//		goto err_gpio_request;
+//	}
+//	ret = gpio_direction_output(LS2S32V_INT_PIN, 0);
+//	if (ret) {
+//		printk(KERN_ERR"Cannot configure GPIO LS2S32V_INT_PIN as output\n");
+//		goto err_gpio_direction_output;
+//	}
+//	pci_set_drvdata (pdev, ndev);
+
+	nxp_pdev_init(pdev, ndev);
+
+	/* init rx interrupt */
+	ret = request_irq(pdev->irq, fpx_interrupt, IRQF_SHARED, ndev->name, ndev);
 	if (ret) {
-		printk(KERN_ERR"Error enabling PCI device\n");
-		goto err_pci_enable_device;
+		printk(KERN_ERR"failed to register interrupt %d\n", pdev->irq);
+		goto err_request_pci_irq;
 	}
 
-	ret = pci_request_regions(pdev, DRIVER_NAME);
-	if (ret) {
-		printk(KERN_ERR"Error requesting region\n");
-		goto err_pci_request_regions;
-	}
-
-	/////////////////////////////////////////////////
-	io_len = pci_resource_len(pdev, 0);		//read bar 0
-	ret = pci_resource_flags(pdev, 0);
-	printk(KERN_ERR"bar0 len = %lu, %08x\n", io_len, ret);
-
-	if (!(ret & IORESOURCE_MEM)) {
-		printk(KERN_ERR"Bad PCI resource\n");
-		ret = -ENODEV;
-		goto err_bad_pci_resource;
-	}
-	/* alloc memory */
-	fep->local_res = request_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE,
-			"pcie-local-ctrl");
-
-	fep->ctrl_ved_l = (struct control_ved*)ioremap_cache(
-		LS_PCI_SMEM, (unsigned long)sizeof(struct control_ved));
-
-	fep->received_data_l = (volatile u32*)ioremap_cache(
-		(resource_size_t)(LS_PCI_SMEM + sizeof(struct control_ved)),
-		LS_PCI_SMEM_SIZE - sizeof(struct control_ved));
-
-	fep->ctrl_ved_r = (struct control_ved*)pci_iomap(pdev, 0, io_len);
-	fep->received_data_r = (volatile void*)(fep->ctrl_ved_r + 1);
-
-	pci_set_master (pdev);
-
-	ret = pci_enable_msi(pdev);
-	if (ret) {
-		printk(KERN_ERR"Error enabling PCI MSI\n");
-		goto err_pci_enable_msi;
-	}
-
-	fep->qdma_regs = (unsigned int*)ioremap_nocache(QDMA_BASE, QDMA_REG_SIZE);
-	if (!fep->qdma_regs) {
-		printk(KERN_ERR"cannot map qdma registers\n");
-		return -1;
-	}
-
+	/* init rx napi */
 	netif_napi_add(ndev, &fep->napi, fpx_enet_rx_napi, NAPI_POLL_WEIGHT);
 	ret = register_netdev(ndev);
 	if (ret) {
@@ -398,13 +384,21 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 
 	/* success */
-	pci_set_drvdata (pdev, ndev);
 	spin_lock_init(&fep->spinlock);
 
 	printk(KERN_ERR"Success %016llx\n", pdev->resource[0].start);
+
 	return 0;
+
 err_register_netdev:
 	netif_napi_del(&fep->napi);
+	free_irq(pdev->irq, ndev);
+err_request_pci_irq:
+err_gpio_direction_output:
+	gpio_free(LS2S32V_INT_PIN);
+err_gpio_request:
+	iounmap((void*)fep->qdma_regs);
+err_init_qdma:
 	pci_disable_msi(pdev);
 err_pci_enable_msi:
 	iounmap((void*)fep->ctrl_ved_l);
@@ -422,20 +416,27 @@ err_pci_enable_device:
 
 static void fpx_remove(struct pci_dev *pdev)
 {
-	struct net_device *ndev = pci_get_drvdata(pdev);
+	struct net_device *ndev = nxp_pdev_get_upper_dev(pdev);
 	struct fpx_enet_private *fep = netdev_priv(ndev);
 
 	printk(KERN_ERR"Remove fpx device.\n");
-	netif_napi_del(&fep->napi);
-	pci_disable_msi(pdev);
+
 	unregister_netdev(ndev);
+	netif_napi_del(&fep->napi);
+	free_irq(pdev->irq, ndev);
+
+	nxp_pdev_free(pdev);
+/*
+	gpio_free(LS2S32V_INT_PIN);
 	iounmap((void*)fep->qdma_regs);
+	pci_disable_msi(pdev);
 	iounmap((void*)fep->ctrl_ved_l);
 	iounmap((void*)fep->received_data_l);
 	release_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
 	pci_iounmap(pdev, fep->ctrl_ved_r);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
+*/
 	free_netdev(ndev);
 }
 
