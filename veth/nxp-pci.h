@@ -9,6 +9,9 @@
 #ifndef DRIVERS_NET_VPCIE_VPCIE_VPCIE_H_
 #define DRIVERS_NET_VPCIE_PCIE_VPCIE_H_
 
+/* TODO: buffer size (and number?) should be configurable on pdev init */
+#define MAX_NO_BUFFERS		512
+#define MAX_BUFFER_SIZE		1536
 #define LS_PCI_SMEM		0x83A0000000ULL	/* Remote, LS */
 #define LS_PCI_SMEM_SIZE	0x00400000	/* 4 MB */
 
@@ -17,13 +20,18 @@
 
 #define LS2S32V_INT_PIN		434	/* GPIO interrupt pin */
 
-/* TODO: test w/o volatile */
+/* TODO: test w/o volatile (may need memory barriers) */
+/* TODO: change read/write index to u32 and update padding */
 struct nxp_pci_shm {
 	volatile u64 write_index;
 	volatile u64 read_index;
 	volatile u64 pad[6];
 	volatile void* data;
 };
+
+/* TODO: Rename */
+/* head room used to store in-band data length */
+#define NXP_PCI_TX_BUF_HEADROOM		2
 
 /**
  * struct nxp_pdev_priv - NXP generic PCI device
@@ -44,6 +52,13 @@ struct nxp_pdev_priv {
 
 	struct nxp_pci_shm *local_shm;
 	struct nxp_pci_shm *remote_shm;
+
+	spinlock_t spinlock;
+};
+
+struct nxp_pdev_msg {
+	u16 size;
+	void *data;
 };
 
 int nxp_pci_register_driver(struct pci_driver *drv);
@@ -53,6 +68,7 @@ int nxp_pdev_init(struct pci_dev *pdev, void *upper_dev);
 void nxp_pdev_free(struct pci_dev *pdev);
 void *nxp_pdev_get_upper_dev(struct pci_dev *pdev);
 
-int nxp_pdev_tx_data(struct pci_dev *pdev);
+int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg);
+int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg);
 
 #endif /* DRIVERS_NET_VPCIE_VPCIE_VPCIE_H_ */

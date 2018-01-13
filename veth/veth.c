@@ -30,85 +30,184 @@
 
 extern void __dma_flush_range(const void *, const void *);
 
-static netdev_tx_t
-fpx_start_xmit(struct sk_buff *skb, struct net_device *ndev)
+//static netdev_tx_t fpx_start_xmit(struct sk_buff *skb, struct net_device *ndev)
+//{
+//	struct fpx_enet_private *fep;
+//	u64 write_i, read_i;
+//	unsigned long flags;
+//
+//	fep = netdev_priv(ndev);
+//
+//	spin_lock_irqsave(&fep->spinlock, flags);
+//	write_i = fep->ctrl_ved_r->current_write_index;
+//	read_i = fep->ctrl_ved_r->current_read_index;
+//
+//	if (write_i > (read_i + MAX_NO_BUFFERS)) {
+//		/* discard frame */
+//		ndev->stats.tx_dropped ++;
+//	} else {
+//		u32 status = 0;
+//		void* start = (skb->data - sizeof(u16));
+//		void* end = start + skb->len + sizeof(u16);
+//
+//		if (unlikely(skb->len > U16_MAX)) {
+//			netdev_err(ndev,
+//			        "Frame length exceeding 64kB\n");
+//		}
+//
+//		if (unlikely(skb_headroom(skb) < sizeof(u16))) {
+//			netdev_err(ndev,
+//			        "\nNot enough head room to store data length");
+//		}
+//
+//		*(u16*)(skb->data - sizeof(u16)) = (u16)skb->len;
+//		__dma_flush_range((const void*)start, (const void*)end);
+//
+//		*fep->qdma_regs &= ~1;
+//		status = *(fep->qdma_regs + 1) & 0x92;
+//
+//		if (status) *(fep->qdma_regs + 1) = status;
+//
+//		*(fep->qdma_regs + 4) = upper_32_bits(virt_to_phys(start)) & 0xffff;
+//		*(fep->qdma_regs + 5) = lower_32_bits(virt_to_phys(start));
+//
+//		*(fep->qdma_regs + 6) = (u32)(fep->pci_dev->resource[0].start >> 32);
+//		*(fep->qdma_regs + 7) = (u32)(fep->pci_dev->resource[0].start) +
+//						OFFSET_TO_DATA + ((write_i & (MAX_NO_BUFFERS - 1)) * (MAX_BUFFER_SIZE));
+//		*(fep->qdma_regs + 8) = skb->len + sizeof(u16);
+//
+//		while (1) {
+//			*fep->qdma_regs = 1;
+//
+//			do {
+//				status = *(fep->qdma_regs + 1);
+//			}
+//			while (status & (1 << 2));
+//
+//			if (status & (1 << 7)) {
+//				*(fep->qdma_regs + 1) = status;
+//				*fep->qdma_regs &= ~1;
+//				// redo tx
+//				ndev->stats.tx_errors ++;
+//			}
+//			else break;
+//		}
+//		write_i ++;
+//		fep->ctrl_ved_r->current_write_index = write_i;
+//		fep->level ^= 1;
+//		gpio_set_value(LS2S32V_INT_PIN, fep->level);
+//
+//		ndev->stats.tx_packets++;
+//		ndev->stats.tx_bytes += skb->len;
+//	}
+//	spin_unlock_irqrestore(&fep->spinlock, flags);
+//
+//	dev_kfree_skb_any(skb);	/* kfree skbuf */
+//
+//	return NETDEV_TX_OK;
+//}
+
+static netdev_tx_t fpx_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
-	struct fpx_enet_private *fep;
-	u64 write_i, read_i;
-	unsigned long flags;
+	struct fpx_enet_private *fep = netdev_priv(ndev);
+	struct nxp_pdev_msg msg;
+	int err;
 
-	fep = netdev_priv(ndev);
-
-	spin_lock_irqsave(&fep->spinlock, flags);
-	write_i = fep->ctrl_ved_r->current_write_index;
-	read_i = fep->ctrl_ved_r->current_read_index;
-
-	if (write_i > (read_i + MAX_NO_BUFFERS)) {
-		/* discard frame */
-		ndev->stats.tx_dropped ++;
+	if (unlikely(skb_headroom(skb) < NXP_PCI_TX_BUF_HEADROOM)) {
+		netdev_err(ndev, "Not enough head room\n");
+		goto err_out;
 	}
-	else {
-		u32 status = 0;
-		void* start = (skb->data - sizeof(u16));
-		void* end = start + skb->len + sizeof(u16);
 
-		if (unlikely(skb->len > U16_MAX)) {
-			netdev_err(ndev,
-			        "Frame length exceeding 64kB\n");
-		}
-
-		if (unlikely(skb_headroom(skb) < sizeof(u16))) {
-			netdev_err(ndev,
-			        "\nNot enough head room to store data length");
-		}
-
-		*(u16*)(skb->data - sizeof(u16)) = (u16)skb->len;
-		__dma_flush_range((const void*)start, (const void*)end);
-
-		*fep->qdma_regs &= ~1;
-		status = *(fep->qdma_regs + 1) & 0x92;
-
-		if (status) *(fep->qdma_regs + 1) = status;
-
-		*(fep->qdma_regs + 4) = upper_32_bits(virt_to_phys(start)) & 0xffff;
-		*(fep->qdma_regs + 5) = lower_32_bits(virt_to_phys(start));
-
-		*(fep->qdma_regs + 6) = (u32)(fep->pci_dev->resource[0].start >> 32);
-		*(fep->qdma_regs + 7) = (u32)(fep->pci_dev->resource[0].start) +
-						OFFSET_TO_DATA + ((write_i & (MAX_NO_BUFFERS - 1)) * (MAX_BUFFER_SIZE));
-		*(fep->qdma_regs + 8) = skb->len + sizeof(u16);
-
-		while (1) {
-			*fep->qdma_regs = 1;
-
-			do {
-				status = *(fep->qdma_regs + 1);
-			}
-			while (status & (1 << 2));
-
-			if (status & (1 << 7)) {
-				*(fep->qdma_regs + 1) = status;
-				*fep->qdma_regs &= ~1;
-				// redo tx
-				ndev->stats.tx_errors ++;
-			}
-			else break;
-		}
-		write_i ++;
-		fep->ctrl_ved_r->current_write_index = write_i;
-		fep->level ^= 1;
-		gpio_set_value(LS2S32V_INT_PIN, fep->level);
-
-		ndev->stats.tx_packets++;
-		ndev->stats.tx_bytes += skb->len;
+	msg.size = skb->len;
+	msg.data = skb->data;
+	err = nxp_pdev_write_msg(fep->pci_dev, &msg);
+	if (err) {
+		ndev->stats.tx_dropped++;
+		goto err_out;
 	}
-	spin_unlock_irqrestore(&fep->spinlock, flags);
 
-	dev_kfree_skb_any(skb);	/* kfree skbuf */
+	ndev->stats.tx_packets++;
+	ndev->stats.tx_bytes += skb->len;
+
+err_out:
+	dev_kfree_skb_any(skb);
 
 	return NETDEV_TX_OK;
 }
 
+//static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
+//{
+//	struct net_device *ndev = napi->dev;
+//	struct fpx_enet_private *fep = netdev_priv(ndev);
+//	int pkts = 0;
+//	struct sk_buff *skb;
+//
+//	u64 write_i, read_i;
+//	volatile void* tmp_data;
+//
+//	write_i = fep->ctrl_ved_l->current_write_index;
+//	read_i = fep->ctrl_ved_l->current_read_index;
+//
+//	tmp_data = ((volatile void *)fep->received_data_l) +
+//		((read_i & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE);
+//
+//	while ((pkts < budget) && (write_i > read_i)) {
+//		u16 buf_len;
+//		pkts ++;
+//		/* get the buffer length and restore the data */
+//		buf_len = *(u16*)tmp_data;
+////		printk("Rx buff len: %x\n", buf_len);
+////		printk("Rx buff first 4 bytes: %x\n", tmp_data + sizeof(u16));
+//
+//		if (buf_len < MAX_BUFFER_SIZE) {
+//			skb = napi_alloc_skb(napi, buf_len);
+//			if (unlikely(!skb)) {
+//				ndev->stats.rx_dropped++;
+//			} else {
+//				unsigned char* tmp = NULL;
+//
+//				/* update RX stats */
+//				ndev->stats.rx_packets++;
+//				ndev->stats.rx_bytes += buf_len;
+//
+//				/* TODO: check small performance improvement
+//				 * update skb alloc size and buf_len check */
+//				//skb_reserve(skb, NET_IP_ALIGN);
+//
+//				/* do memcpy */
+//				tmp = skb_put(skb, buf_len);
+//
+//				memcpy((tmp), (const void *)tmp_data + sizeof(u16), buf_len);
+//				skb->protocol = eth_type_trans(skb, ndev);
+//
+//				/* TODO: check small performance improvement */
+//				//skb->ip_summed = CHECKSUM_UNNECESSARY;
+//
+//				netif_receive_skb(skb);
+//
+//				/* TODO: check small performance improvement */
+//				//napi_gro_receive(napi, skb);
+//			}
+//		} else {
+//			ndev->stats.rx_errors ++;
+//		}
+//		read_i ++;
+//		write_i = fep->ctrl_ved_l->current_write_index;	/* read the new write index */
+//		fep->ctrl_ved_l->current_read_index = read_i;	/* update the read index */
+//		if (read_i & ((MAX_NO_BUFFERS - 1))) {
+//			tmp_data += MAX_BUFFER_SIZE;
+//		} else {
+//			tmp_data = (void *)fep->received_data_l;
+//		}
+//	}
+//
+//	/* re-enable interrupts */
+//	if (pkts < budget) {
+//		napi_complete(napi);
+//		/* reenable interrupt */
+//	}
+//	return pkts;
+//}
 
 static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 {
@@ -116,70 +215,49 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 	struct fpx_enet_private *fep = netdev_priv(ndev);
 	int pkts = 0;
 	struct sk_buff *skb;
+	struct nxp_pdev_msg msg;
+	int err = 0;
 
-	u64 write_i, read_i;
-	volatile void* tmp_data;
-
-	write_i = fep->ctrl_ved_l->current_write_index;
-	read_i = fep->ctrl_ved_l->current_read_index;
-
-	tmp_data = ((volatile void *)fep->received_data_l) +
-		((read_i & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE);
-
-	while ((pkts < budget) && (write_i > read_i)) {
-		u16 buf_len;
-		pkts ++;
-		/* get the buffer length and restore the data */
-		buf_len = *(u16*)tmp_data;
-//		printk("Rx buff len: %x\n", buf_len);
-//		printk("Rx buff first 4 bytes: %x\n", tmp_data + sizeof(u16));
-
-		if (buf_len < MAX_BUFFER_SIZE) {
-			skb = napi_alloc_skb(napi, buf_len);
-			if (unlikely(!skb)) {
-				ndev->stats.rx_dropped++;
-			} else {
-				unsigned char* tmp = NULL;
-
-				/* update RX stats */
-				ndev->stats.rx_packets++;
-				ndev->stats.rx_bytes += buf_len;
-
-				/* TODO: check small performance improvement
-				 * update skb alloc size and buf_len check */
-				//skb_reserve(skb, NET_IP_ALIGN);
-
-				/* do memcpy */
-				tmp = skb_put(skb, buf_len);
-
-				memcpy((tmp), (const void *)tmp_data + sizeof(u16), buf_len);
-				skb->protocol = eth_type_trans(skb, ndev);
-
-				/* TODO: check small performance improvement */
-				//skb->ip_summed = CHECKSUM_UNNECESSARY;
-
-				netif_receive_skb(skb);
-
-				/* TODO: check small performance improvement */
-				//napi_gro_receive(napi, skb);
-			}
-		} else {
-			ndev->stats.rx_errors ++;
+	do {
+		err = nxp_pdev_read_msg(fep->pci_dev, &msg);
+		if (err) {
+			if (err != -ENODATA)
+				ndev->stats.rx_errors++;
+			continue;
 		}
-		read_i ++;
-		write_i = fep->ctrl_ved_l->current_write_index;	/* read the new write index */
-		fep->ctrl_ved_l->current_read_index = read_i;	/* update the read index */
-		if (read_i & ((MAX_NO_BUFFERS - 1))) {
-			tmp_data += MAX_BUFFER_SIZE;
-		} else {
-			tmp_data = (void *)fep->received_data_l;
-		}
-	}
 
-	/* re-enable interrupts */
+		skb = napi_alloc_skb(napi, msg.size);
+		if (unlikely(!skb)) {
+			ndev->stats.rx_dropped++;
+			continue;
+		}
+
+		/* TODO: check small performance improvement
+		 * update skb alloc size and buf_len check */
+		//skb_reserve(skb, NET_IP_ALIGN);
+
+		/* do memcpy */
+		skb_put(skb, msg.size);
+
+		memcpy(skb->data, msg.data, msg.size);
+		skb->protocol = eth_type_trans(skb, ndev);
+
+		/* TODO: check small performance improvement */
+		//skb->ip_summed = CHECKSUM_UNNECESSARY;
+
+		/* update RX stats */
+		ndev->stats.rx_packets++;
+		ndev->stats.rx_bytes += msg.size;
+
+		netif_receive_skb(skb);
+
+		/* TODO: check small performance improvement */
+		//napi_gro_receive(napi, skb);
+	} while (err != -ENODATA && ++pkts < budget);
+
 	if (pkts < budget) {
 		napi_complete(napi);
-		/* reenable interrupt */
+		/* TODO: re-enable interrupt */
 	}
 	return pkts;
 }
@@ -188,11 +266,11 @@ static irqreturn_t fpx_interrupt(int irq, void *dev_instance)
 {
 	struct net_device *ndev = (struct net_device *) dev_instance;
 	struct fpx_enet_private *fep = netdev_priv(ndev);
-	if (napi_schedule_prep(&fep->napi)) {
-		__napi_schedule(&fep->napi);
-	}
 
-	return IRQ_RETVAL(1);
+	/* TODO: disable interrupt before napi schedule*/
+	napi_schedule(&fep->napi);
+
+	return IRQ_HANDLED;
 }
 
 static int
@@ -259,7 +337,7 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	ndev->flags = 0;
 	ndev->priv_flags &= ~IFF_TX_SKB_SHARING;
 	ndev->netdev_ops = &fpx_netdev_ops;
-	ndev->needed_headroom = sizeof(u16);
+	ndev->needed_headroom = NXP_PCI_TX_BUF_HEADROOM;
 
 	ndev->dev_addr[0] = 0x88;
 	ndev->dev_addr[1] = 0x01;
@@ -358,9 +436,6 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		printk(KERN_ERR"Error registering netdevice\n");
 		goto err_register_netdev;
 	}
-
-	/* success */
-	spin_lock_init(&fep->spinlock);
 
 	printk(KERN_ERR"Success %016llx\n", pdev->resource[0].start);
 

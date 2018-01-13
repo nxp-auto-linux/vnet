@@ -144,6 +144,8 @@ int nxp_pdev_init(struct pci_dev *pdev, void *upper_dev)
 		goto err_gpio_free;
 	}
 
+	spin_lock_init(&priv->spinlock);
+
 	priv->upper_dev = upper_dev;
 	pci_set_drvdata(pdev, priv);
 	dev_dbg(dev, "PCI dev init success. Device mapped at: %016llx\n",
@@ -219,4 +221,114 @@ int nxp_pdev_register_rx_cb(struct pci_dev *pdev, irq_handler_t handler,
 void nxp_pdev_unregister_rx_cb(struct pci_dev *pdev, void *dev_id)
 {
 	free_irq(pdev->irq, dev_id);
+}
+
+int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
+{
+	struct nxp_pdev_priv *priv;
+	struct nxp_pci_shm *shm;
+	phys_addr_t shm_paddr;
+	unsigned long flags;
+	void *start, *end;
+	u32 status = 0;
+
+	if (!pdev || !msg)
+		return -EINVAL;
+
+	priv = pci_get_drvdata(pdev);
+	shm = priv->remote_shm;
+
+	if (msg.size > MAX_BUFFER_SIZE)
+		return -EMSGSIZE;
+
+	spin_lock_irqsave(&priv->spinlock, flags);
+	/* check if queue is full */
+	if (shm->write_index == shm->read_index + MAX_NO_BUFFERS) {
+		spin_unlock_irqrestore(&priv->spinlock, flags);
+		return -ENOBUFS;
+	}
+
+	start = (void *)msg;
+	end = start + NXP_PCI_TX_BUF_HEADROOM + msg->size;
+
+	__dma_flush_range((const void *)start, (const void *)end);
+
+	/* TODO: cleanup code; move qdma stuff to a separate function? */
+	*priv->qdma_regs &= ~1;
+
+	status = *(priv->qdma_regs + 1) & 0x92;
+	if (status)
+		*(priv->qdma_regs + 1) = status;
+
+	/* TODO: Ask Radu why & 0xffff */
+	*(priv->qdma_regs + 4) = upper_32_bits(virt_to_phys(start)) & 0xffff;
+	*(priv->qdma_regs + 5) = lower_32_bits(virt_to_phys(start));
+
+	shm_paddr = priv->pci_dev->resource[0].start;
+
+	/* TODO: use upper/lower_32_bits */
+	*(priv->qdma_regs + 6) = (u32)(shm_paddr >> 32);
+	*(priv->qdma_regs + 7) = (u32)(shm_paddr +
+		offsetof(struct nxp_pci_shm, data) +
+		(shm->write_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE);
+	*(priv->qdma_regs + 8) = msg.size + NXP_PCI_TX_BUF_HEADROOM;
+
+	/* TODO: add retry counter or timeout */
+	while (1) {
+		/* TODO: should this be |= ? */
+		*priv->qdma_regs = 1;
+
+		do {
+			status = *(priv->qdma_regs + 1);
+		} while (status & (1 << 2));
+
+		if (!(status & (1 << 7)))
+			break;
+
+		/* TODO: we don't need this? */
+		*(priv->qdma_regs + 1) = status;
+		*priv->qdma_regs &= ~1;
+		// redo tx
+	}
+
+	shm->write_index++;
+
+	/* Send data available notification to remote peer */
+	priv->gpio_level ^= 1;
+	gpio_set_value(LS2S32V_INT_PIN, priv->gpio_level);
+
+	spin_unlock_irqrestore(&priv->spinlock, flags);
+
+	return 0;
+}
+
+int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
+{
+	struct nxp_pdev_priv *priv;
+	struct nxp_pci_shm *shm;
+
+	if (!pdev || !msg)
+		return -EINVAL;
+
+	priv = pci_get_drvdata(pdev);
+	shm = priv->local_shm;
+
+	/* check if queue is empty */
+	if (shm->read_index == shm->write_index) {
+		dev_dbg(&pdev->dev, "queue empty");
+		return -ENODATA;
+	}
+
+	/* TODO: optimize mem usage: use write/read offset instead of index */
+	msg = (struct nxp_pdev_msg *) (shm->data +
+		(shm->read_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE);
+
+	if (msg->size > MAX_BUFFER_SIZE) {
+		dev_dbg(&pdev->dev, "rx message too large");
+		return -EIO;
+	}
+
+	shm->read_index++;
+
+	return 0;
 }

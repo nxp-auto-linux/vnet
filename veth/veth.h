@@ -53,8 +53,6 @@ struct fpx_enet_private {
 	struct net_device *netdev;
 	struct napi_struct napi;
 
-	spinlock_t spinlock;
-
 	struct resource *local_res;
 	struct resource *remote_res;
 
