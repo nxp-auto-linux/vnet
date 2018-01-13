@@ -18,6 +18,48 @@
 #define PCI_RES_NAME "nxp-pci"
 #define BAR0 0
 
+static const struct pci_device_id fpx_ids[] = {
+	{
+		PCI_DEVICE(0x1957, 0x4001)
+	},
+	{0, }
+};
+
+MODULE_DEVICE_TABLE(pci, fpx_ids);
+
+/**
+ * nxp_pci_register_driver - register a new pci virtual device driver
+ * @drv: the pci driver structure to register. Only probe and remove fields
+ * 	 must be initialized.
+ *
+ * This is a wrapper over pci_register_driver() function and its purpose is to
+ * hide the pci specifics (i.e. pci device id table) from the upper driver.
+ */
+int nxp_pci_register_driver(struct pci_driver *drv)
+{
+	if (drv->name == NULL)
+		drv->name = "NXP PCI virtual device driver";
+	drv->id_table = fpx_ids;
+	return pci_register_driver(drv);
+}
+
+/**
+ * pci_unregister_driver - unregister a pci driver
+ * @drv: the driver structure to unregister
+ *
+ * This is a wrapper over pci_unregister_driver().
+ */
+void nxp_pci_unregister_driver(struct pci_driver *drv)
+{
+	pci_unregister_driver(drv);
+}
+
+/**
+ * nxp_pdev_init - unregister a pci driver
+ * @drv: the driver structure to unregister
+ *
+ * This is a wrapper over pci_unregister_driver().
+ */
 int nxp_pdev_init(struct pci_dev *pdev, void *upper_dev)
 {
 	struct device *dev = &pdev->dev;
@@ -159,7 +201,7 @@ void *nxp_pdev_get_upper_dev(struct pci_dev *pdev)
  * @handler:	Function to be called when the rx IRQ occurs.
  * @dev_id:	A cookie passed back to the handler function
  */
-int nxp_pci_dev_register_rx_cb(struct pci_dev *pdev, irq_handler_t handler,
+int nxp_pdev_register_rx_cb(struct pci_dev *pdev, irq_handler_t handler,
 			       void *arg)
 {
 	int err;
@@ -174,7 +216,7 @@ int nxp_pci_dev_register_rx_cb(struct pci_dev *pdev, irq_handler_t handler,
 	return err;
 }
 
-void nxp_pci_dev_unregister_rx_cb(struct pci_dev *pdev, void *dev_id)
+void nxp_pdev_unregister_rx_cb(struct pci_dev *pdev, void *dev_id)
 {
 	free_irq(pdev->irq, dev_id);
 }

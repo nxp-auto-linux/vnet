@@ -8,25 +8,23 @@
 #ifndef FPX_H
 #define	FPX_H
 
-#define MAX_NO_BUFFERS			512
-#define SKBUF_Q_SIZE        	(MAX_NO_BUFFERS)
-#define MAX_BUFFER_SIZE			(1536)
+#define MAX_NO_BUFFERS		512
+#define MAX_BUFFER_SIZE		1536
 
-#define S32_PCI_SMEM			0xfd000000
+#define S32_PCI_SMEM		0xfd000000
 
-#define S32_PCI_SMEM_SIZE		0x00400000	/* 4 MB */
-#define S32_PCI_MSI_MEM			(S32_PCI_SMEM + S32_PCI_SMEM_SIZE)
-#define S32_PCI_MSI_SIZE		0x1000		/* 4 KB */
+#define S32_PCI_SMEM_SIZE	0x00400000	/* 4 MB */
+#define S32_PCI_MSI_MEM		(S32_PCI_SMEM + S32_PCI_SMEM_SIZE)
+#define S32_PCI_MSI_SIZE	0x1000		/* 4 KB */
 
-#define LS_PCI_SMEM				0x83A0000000ULL	/* Remote, LS */
-#define LS_PCI_SMEM_SIZE		0x00400000	/* 4 MB */
-#define S32V_REMOTE_PCI_BASE	0x72000000	/* Local, S32V */
-#define LS_REMOTE_PCI_BASE		0x0000003840000000	/* Local, LS */
+#define LS_PCI_SMEM		0x83A0000000ULL	/* Remote, LS */
+#define LS_PCI_SMEM_SIZE	0x00400000	/* 4 MB */
+#define LS_REMOTE_PCI_BASE	0x0000003840000000	/* Local, LS */
 
-#define QDMA_BASE			0x8390100
+#define QDMA_BASE		0x8390100
 #define QDMA_REG_SIZE		0x100
 
-#define LS2S32V_INT_PIN			434
+#define LS2S32V_INT_PIN		434
 
 
 struct dma_desc {
@@ -60,8 +58,6 @@ struct fpx_enet_private {
 	struct resource *local_res;
 	struct resource *remote_res;
 
-	struct sk_buff *sk_buff_queue_rx[SKBUF_Q_SIZE];
-	int rx_sk_buff_index;
 	u32 level;
 	volatile u32* qdma_regs;
 

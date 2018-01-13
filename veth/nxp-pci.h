@@ -46,10 +46,13 @@ struct nxp_pdev_priv {
 	struct nxp_pci_shm *remote_shm;
 };
 
+int nxp_pci_register_driver(struct pci_driver *drv);
+void nxp_pci_unregister_driver(struct pci_driver *drv);
+
 int nxp_pdev_init(struct pci_dev *pdev, void *upper_dev);
 void nxp_pdev_free(struct pci_dev *pdev);
 void *nxp_pdev_get_upper_dev(struct pci_dev *pdev);
 
-int nxp_
+int nxp_pdev_tx_data(struct pci_dev *pdev);
 
 #endif /* DRIVERS_NET_VPCIE_VPCIE_VPCIE_H_ */
