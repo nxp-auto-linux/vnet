@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 NXP
+ * Copyright 2018 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -9,14 +9,20 @@
 #include <linux/etherdevice.h>
 #include <linux/skbuff.h>
 #include <linux/pci.h>
-#include "veth.h"
 #include "nxp-pci.h"
 
-#define DRIVER_NAME "fpx"
+#define DRIVER_NAME "nxp-veth"
 
-static netdev_tx_t fpx_start_xmit(struct sk_buff *skb, struct net_device *ndev)
+struct veth_ndev_priv {
+	/* Hardware registers of the fpx device */
+	struct pci_dev *pci_dev;
+	struct net_device *netdev;
+	struct napi_struct napi;
+};
+
+static netdev_tx_t veth_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
-	struct fpx_enet_private *fep = netdev_priv(ndev);
+	struct veth_ndev_priv *priv = netdev_priv(ndev);
 	struct nxp_pdev_msg msg;
 	int err;
 
@@ -27,7 +33,7 @@ static netdev_tx_t fpx_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 
 	msg.size = skb->len;
 	msg.data = skb->data;
-	err = nxp_pdev_write_msg(fep->pci_dev, &msg);
+	err = nxp_pdev_write_msg(priv->pci_dev, &msg);
 	if (err) {
 		ndev->stats.tx_dropped++;
 		goto err_out;
@@ -42,17 +48,17 @@ err_out:
 	return NETDEV_TX_OK;
 }
 
-static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
+static int veth_rx_napi(struct napi_struct *napi, int budget)
 {
 	struct net_device *ndev = napi->dev;
-	struct fpx_enet_private *fep = netdev_priv(ndev);
+	struct veth_ndev_priv *priv = netdev_priv(ndev);
 	int pkts = 0;
 	struct sk_buff *skb;
 	struct nxp_pdev_msg msg;
 	int err = 0;
 
 	do {
-		err = nxp_pdev_read_msg(fep->pci_dev, &msg);
+		err = nxp_pdev_read_msg(priv->pci_dev, &msg);
 		if (err) {
 			if (err != -ENODATA)
 				ndev->stats.rx_errors++;
@@ -90,65 +96,69 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 
 	if (pkts < budget) {
 		napi_complete(napi);
-		/* TODO: re-enable interrupt */
+		/* reenable rx interrupt */
+		enable_irq(priv->pci_dev->irq);
 	}
 	return pkts;
 }
 
-static irqreturn_t fpx_interrupt(int irq, void *dev_instance)
+static void veth_rx_irq(void *dev)
 {
-	struct net_device *ndev = (struct net_device *) dev_instance;
-	struct fpx_enet_private *fep = netdev_priv(ndev);
+	struct net_device *ndev = (struct net_device *)dev;
+	struct veth_ndev_priv *priv = netdev_priv(ndev);
 
-	/* TODO: disable interrupt before napi schedule*/
-	//disable_irq_nosync(fep->pci_dev->irq);
-	napi_schedule(&fep->napi);
-
-	return IRQ_HANDLED;
+	/* disable rx interrupt before napi schedule */
+	disable_irq_nosync(priv->pci_dev->irq);
+	napi_schedule(&priv->napi);
 }
 
-static int fpx_open(struct net_device *ndev)
+static int veth_open(struct net_device *ndev)
 {
-	struct fpx_enet_private *fep = netdev_priv(ndev);
+	struct veth_ndev_priv *priv = netdev_priv(ndev);
 
-	napi_enable(&fep->napi);
-	enable_irq(fep->pci_dev->irq);
+	napi_enable(&priv->napi);
+	enable_irq(priv->pci_dev->irq);
 	netif_tx_start_all_queues(ndev);
 
 	netdev_info(ndev, "Interface %s up\n", ndev->name);
 	return 0;
 }
 
-static int fpx_close(struct net_device *ndev)
+static int veth_close(struct net_device *ndev)
 {
-	struct fpx_enet_private *fep = netdev_priv(ndev);
+	struct veth_ndev_priv *priv = netdev_priv(ndev);
 
-	disable_irq(fep->pci_dev->irq);
+	disable_irq(priv->pci_dev->irq);
 	/* wait for all pending rx frames to be processed by napi */
 	msleep(500);
 
-	napi_disable(&fep->napi);
+	napi_disable(&priv->napi);
 	netif_tx_disable(ndev);
 
 	netdev_info(ndev, "Interface %s down\n", ndev->name);
 	return 0;
 }
 
-static const struct net_device_ops fpx_netdev_ops = {
-	.ndo_open		= fpx_open,
-	.ndo_stop		= fpx_close,
-	.ndo_start_xmit		= fpx_start_xmit,
+static const struct net_device_ops netdev_ops = {
+	.ndo_open		= veth_open,
+	.ndo_stop		= veth_close,
+	.ndo_start_xmit		= veth_start_xmit,
 	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
 };
 
-static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+static struct nxp_pdev_upper_ops pci_ops = {
+	.rx_irq_cb = veth_rx_irq,
+	.tx_done_cb = NULL,
+};
+
+static int veth_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	struct net_device *ndev = NULL;
-	struct fpx_enet_private *fep = NULL;
+	struct veth_ndev_priv *priv = NULL;
 	int err = 0;
 
-	ndev = alloc_netdev(sizeof(struct fpx_enet_private), "fpx%d",
+	ndev = alloc_netdev(sizeof(struct veth_ndev_priv), "fpx%d",
 				NET_NAME_ENUM, ether_setup);
 	if (!ndev) {
 		dev_err(&pdev->dev, "Error alloc_netdev.\n");
@@ -157,7 +167,7 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	ndev->flags = 0;
 	ndev->priv_flags &= ~IFF_TX_SKB_SHARING;
-	ndev->netdev_ops = &fpx_netdev_ops;
+	ndev->netdev_ops = &netdev_ops;
 	ndev->needed_headroom = NXP_PCI_TX_BUF_HEADROOM;
 
 	ndev->dev_addr[0] = 0x88;
@@ -169,85 +179,76 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	SET_NETDEV_DEV(ndev, &pdev->dev);
 
-	fep = netdev_priv(ndev);
-	fep->netdev = ndev;
-	fep->pci_dev = pdev;
+	priv = netdev_priv(ndev);
+	priv->netdev = ndev;
+	priv->pci_dev = pdev;
 
-	err = nxp_pdev_init(pdev, ndev);
+	pci_ops.dev = ndev;
+	err = nxp_pdev_init(pdev, &pci_ops);
 	if (err) {
 		goto err_free_netdev;
 	}
 
 	/* init rx napi */
-	netif_napi_add(ndev, &fep->napi, fpx_enet_rx_napi, NAPI_POLL_WEIGHT);
-	/* init rx interrupt */
-	err = request_irq(pdev->irq, fpx_interrupt, IRQF_SHARED, ndev->name, ndev);
-	if (err) {
-		dev_err(&pdev->dev, "Failed registering interrupt %d\n", pdev->irq);
-		goto err_napi_del;
-	}
-	/* disable rx intr until interface is up (ndo_open) */
-	disable_irq(fep->pci_dev->irq);
+	netif_napi_add(ndev, &priv->napi, veth_rx_napi, NAPI_POLL_WEIGHT);
 
 	err = register_netdev(ndev);
 	if (err) {
 		dev_err(&pdev->dev, "Error registering netdevice\n");
-		goto err_free_irq;
+		goto err_napi_del;
 	}
 
 	netdev_info(ndev, "Interface %s probed successfully\n", ndev->name);
 	return 0;
 
-err_free_irq:
-	free_irq(pdev->irq, ndev);
 err_napi_del:
-	netif_napi_del(&fep->napi);
+	netif_napi_del(&priv->napi);
 	nxp_pdev_free(pdev);
 err_free_netdev:
 	free_netdev(ndev);
 	return err;
 }
 
-static void fpx_remove(struct pci_dev *pdev)
+static void veth_remove(struct pci_dev *pdev)
 {
 	struct net_device *ndev = nxp_pdev_get_upper_dev(pdev);
-	struct fpx_enet_private *fep = netdev_priv(ndev);
+	struct veth_ndev_priv *priv = netdev_priv(ndev);
 
 	if (ndev == NULL) {
-		dev_err(&pdev->dev, "Remove fpx device failed.\n");
+		dev_err(&pdev->dev, "Remove veth device failed.\n");
 		return;
 	}
 
 	netdev_info(ndev, "Interface %s removed successfully\n", ndev->name);
 
 	unregister_netdev(ndev);
-	free_irq(pdev->irq, ndev);
-	netif_napi_del(&fep->napi);
+	netif_napi_del(&priv->napi);
 
 	nxp_pdev_free(pdev);
 
 	free_netdev(ndev);
 }
 
-static struct pci_driver fpx_driver = {
-	.probe = fpx_probe,
-	.remove = fpx_remove,
+static struct pci_driver veth_driver = {
+	.name = DRIVER_NAME,
+	.probe = veth_probe,
+	.remove = veth_remove,
 };
 
-static int __init fpx_init(void)
+static int __init veth_init(void)
 {
 	pr_info("driver init - v0.2\n");
-	return nxp_pci_register_driver(&fpx_driver);
+	return nxp_pci_register_driver(&veth_driver);
 }
 
-static void __exit fpx_exit(void)
+static void __exit veth_exit(void)
 {
 	pr_info("driver exit\n");
-	nxp_pci_unregister_driver(&fpx_driver);
+	nxp_pci_unregister_driver(&veth_driver);
 }
 
-module_init(fpx_init);
-module_exit(fpx_exit);
+module_init(veth_init);
+module_exit(veth_exit);
 
 MODULE_ALIAS("platform:"DRIVER_NAME);
 MODULE_LICENSE("GPL");

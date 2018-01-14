@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 NXP
+ * Copyright 2018 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -12,7 +12,9 @@
 /* TODO: buffer size (and number?) should be configurable on pdev init */
 #define MAX_NO_BUFFERS		512
 #define MAX_BUFFER_SIZE		1536
-#define LS_PCI_SMEM		0x83A0000000ULL	/* Remote, LS */
+
+/* LS2084 shared memory in DDR visible by pci endpoint */
+#define LS_PCI_SMEM		0x83A0000000ULL
 #define LS_PCI_SMEM_SIZE	0x00400000	/* 4 MB */
 
 #define QDMA_BASE		0x8390100
@@ -29,10 +31,6 @@ struct nxp_pci_shm {
 	volatile void* data;
 };
 
-/* TODO: Rename */
-/* head room used to store in-band data length */
-#define NXP_PCI_TX_BUF_HEADROOM		2
-
 /**
  * struct nxp_pdev_priv - NXP generic PCI device
  *
@@ -45,7 +43,7 @@ struct nxp_pci_shm {
 struct nxp_pdev_priv {
 	/* Hardware registers of the fpx device */
 	struct pci_dev *pci_dev;
-	void *upper_dev;
+	struct nxp_pdev_upper_ops *upper_ops;
 
 	volatile u32* qdma_regs;
 	u32 gpio_level;
@@ -56,15 +54,25 @@ struct nxp_pdev_priv {
 	spinlock_t spinlock;
 };
 
+/* TODO: Rename */
+/* head room used to store in-band data length */
+#define NXP_PCI_TX_BUF_HEADROOM		2
+
 struct nxp_pdev_msg {
 	u16 size;
 	void *data;
 };
 
+struct nxp_pdev_upper_ops {
+	void *dev;
+	void (*rx_irq_cb)(void *dev);
+	void (*tx_done_cb)(void *dev);
+};
+
 int nxp_pci_register_driver(struct pci_driver *drv);
 void nxp_pci_unregister_driver(struct pci_driver *drv);
 
-int nxp_pdev_init(struct pci_dev *pdev, void *upper_dev);
+int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops);
 void nxp_pdev_free(struct pci_dev *pdev);
 void *nxp_pdev_get_upper_dev(struct pci_dev *pdev);
 

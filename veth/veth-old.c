@@ -176,8 +176,8 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 	/* re-enable interrupts */
 	if (pkts < budget) {
 		napi_complete(napi);
-		/* reenable interrupt */
-		//enable_irq(fep->pci_dev->irq);
+		/* reenable rx interrupt */
+		enable_irq(fep->pci_dev->irq);
 	}
 	return pkts;
 }
@@ -187,15 +187,16 @@ static irqreturn_t fpx_interrupt(int irq, void *dev_instance)
 	struct net_device *ndev = (struct net_device *) dev_instance;
 	struct fpx_enet_private *fep = netdev_priv(ndev);
 
-	/* TODO: disable interrupt before napi schedule*/
-	//disable_irq_nosync(fep->pci_dev->irq);
+//	fep->rx_irq_count++;
+
+	/* disable rx interrupt before napi schedule */
+	disable_irq_nosync(fep->pci_dev->irq);
 	napi_schedule(&fep->napi);
 
 	return IRQ_HANDLED;
 }
 
-static int
-fpx_open(struct net_device *ndev)
+static int fpx_open(struct net_device *ndev)
 {
 	struct fpx_enet_private *fep = netdev_priv(ndev);
 
@@ -208,12 +209,13 @@ fpx_open(struct net_device *ndev)
 	return 0;
 }
 
-static int
-fpx_close(struct net_device *ndev)
+static int fpx_close(struct net_device *ndev)
 {
 	struct fpx_enet_private *fep = netdev_priv(ndev);
 
 	printk(KERN_ERR"fpx_close()\n");
+//	pr_info("fpx_interrupt count: %d\n", fep->rx_irq_count);
+//	fep->rx_irq_count = 0;
 
 	disable_irq(fep->pci_dev->irq);
 	/* wait for all pending rx frames to be processed by napi */
@@ -416,7 +418,7 @@ static struct pci_driver fpx_driver = {
 
 static int __init fpx_init(void)
 {
-	printk(KERN_ERR"fpx_init() - v0.1\n");
+	printk(KERN_ERR"fpx_init() - v0.11\n");
 	return nxp_pci_register_driver(&fpx_driver);
 }
 

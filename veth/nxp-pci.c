@@ -1,5 +1,5 @@
 /*
- * Copyright 2017 NXP
+ * Copyright 2018 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -19,14 +19,14 @@
 #define PCI_RES_NAME "nxp-pci"
 #define BAR0 0
 
-static const struct pci_device_id fpx_ids[] = {
+static const struct pci_device_id pdev_ids[] = {
 	{
 		PCI_DEVICE(0x1957, 0x4001)
 	},
 	{0, }
 };
 
-MODULE_DEVICE_TABLE(pci, fpx_ids);
+MODULE_DEVICE_TABLE(pci, pdev_ids);
 
 /**
  * nxp_pci_register_driver - register a new pci virtual device driver
@@ -39,8 +39,8 @@ MODULE_DEVICE_TABLE(pci, fpx_ids);
 int nxp_pci_register_driver(struct pci_driver *drv)
 {
 	if (drv->name == NULL)
-		drv->name = "NXP PCI virtual dev";
-	drv->id_table = fpx_ids;
+		drv->name = "nxp-pci-dev";
+	drv->id_table = pdev_ids;
 	return pci_register_driver(drv);
 }
 
@@ -55,19 +55,34 @@ void nxp_pci_unregister_driver(struct pci_driver *drv)
 	pci_unregister_driver(drv);
 }
 
+static irqreturn_t nxp_pdev_rx_irq(int irq, void *dev_instance)
+{
+	struct pci_dev *pdev = (struct pci_dev *)dev_instance;
+	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
+
+	if (priv->upper_ops->rx_irq_cb)
+		priv->upper_ops->rx_irq_cb(priv->upper_ops->dev);
+
+	return IRQ_HANDLED;
+}
+
 /**
  * nxp_pdev_init - unregister a pci driver
  * @drv: the driver structure to unregister
  *
  * This is a wrapper over pci_unregister_driver().
  */
-int nxp_pdev_init(struct pci_dev *pdev, void *upper_dev)
+int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 {
-	struct device *dev = &pdev->dev;
+	struct device *dev;
 	struct nxp_pdev_priv *priv;
 	u32 io_len;
 	int err;
 
+	if (!pdev || !upper_ops)
+		return -EINVAL;
+
+	dev = &pdev->dev;
 	dev_dbg(dev, "Inir PCI dev: vendor = %04x, dev = %04x\n", pdev->vendor,
 		pdev->device);
 
@@ -125,12 +140,22 @@ int nxp_pdev_init(struct pci_dev *pdev, void *upper_dev)
 		goto err_pci_unmap;
 	}
 
+	/* init rx interrupt */
+	err = request_irq(pdev->irq, nxp_pdev_rx_irq, IRQF_SHARED,
+				dev_name(&pdev->dev), pdev);
+	if (err) {
+		dev_err(&pdev->dev, "Request interrupt %d failed\n", pdev->irq);
+		goto err_pci_disable_msi;
+	}
+	/* disable rx intr until upper dev is ready to receive data) */
+	disable_irq(pdev->irq);
+
 	/* init qdma for tx */ /* TODO: try remove cast from all ioremap */
 	priv->qdma_regs = (u32*)ioremap_nocache(QDMA_BASE, QDMA_REG_SIZE);
 	if (!priv->qdma_regs) {
 		dev_err(dev, "Cannot map qdma registers\n");
 		err = -ENOMEM;
-		goto err_pci_disable_msi;
+		goto err_free_irq;
 	}
 
 	/* init tx gpio signaling interrupt */
@@ -143,14 +168,14 @@ int nxp_pdev_init(struct pci_dev *pdev, void *upper_dev)
 	}
 	err = gpio_direction_output(LS2S32V_INT_PIN, 0);
 	if (err) {
-		dev_err(dev, "Cannot configure GPIO LS2S32V_INT_PIN as output\n");
+		dev_err(dev, "Cannot set GPIO LS2S32V_INT_PIN as output\n");
 		err = -ENODEV;
 		goto err_gpio_free;
 	}
 
 	spin_lock_init(&priv->spinlock);
 
-	priv->upper_dev = upper_dev;
+	priv->upper_ops = upper_ops;
 	pci_set_drvdata(pdev, priv);
 
 	dev_dbg(dev, "PCI dev init successfully. Device mapped at: %016llx\n",
@@ -161,6 +186,8 @@ err_gpio_free:
 	gpio_free(LS2S32V_INT_PIN);
 err_qdma_unmap:
 	iounmap(priv->qdma_regs);
+err_free_irq:
+	free_irq(pdev->irq, pdev);
 err_pci_disable_msi:
 	pci_disable_msi(pdev);
 err_pci_unmap:
@@ -185,6 +212,7 @@ void nxp_pdev_free(struct pci_dev *pdev)
 
 	gpio_free(LS2S32V_INT_PIN);
 	iounmap(priv->qdma_regs);
+	free_irq(pdev->irq, pdev);
 	pci_disable_msi(pdev);
 	pci_iounmap(pdev, priv->remote_shm);
 	iounmap(priv->local_shm);
@@ -198,7 +226,7 @@ void *nxp_pdev_get_upper_dev(struct pci_dev *pdev)
 {
 	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
 
-	return priv->upper_dev;
+	return priv->upper_ops->dev;
 }
 
 /**
@@ -304,7 +332,7 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 
 	spin_unlock_irqrestore(&priv->spinlock, flags);
 
-	dev_dbg(&pdev->dev, "pci dev mapped at %016llx\n", pdev->resource[0].start);
+	dev_dbg(&pdev->dev, "pci dev mapped at %llx\n", pdev->resource[0].start);
 	return 0;
 }
 
