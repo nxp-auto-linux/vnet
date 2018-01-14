@@ -12,6 +12,7 @@
 #include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/gpio.h>
+#include <asm/cacheflush.h>
 
 #include "nxp-pci.h"
 
@@ -38,7 +39,7 @@ MODULE_DEVICE_TABLE(pci, fpx_ids);
 int nxp_pci_register_driver(struct pci_driver *drv)
 {
 	if (drv->name == NULL)
-		drv->name = "NXP PCI virtual device driver";
+		drv->name = "NXP PCI virtual dev";
 	drv->id_table = fpx_ids;
 	return pci_register_driver(drv);
 }
@@ -66,6 +67,9 @@ int nxp_pdev_init(struct pci_dev *pdev, void *upper_dev)
 	struct nxp_pdev_priv *priv;
 	u32 io_len;
 	int err;
+
+	dev_dbg(dev, "Inir PCI dev: vendor = %04x, dev = %04x\n", pdev->vendor,
+		pdev->device);
 
 	/* alloc private data struct */
 	priv = kzalloc(sizeof(struct nxp_pdev_priv), GFP_KERNEL);
@@ -148,9 +152,9 @@ int nxp_pdev_init(struct pci_dev *pdev, void *upper_dev)
 
 	priv->upper_dev = upper_dev;
 	pci_set_drvdata(pdev, priv);
-	dev_dbg(dev, "PCI dev init success. Device mapped at: %016llx\n",
-		pdev->resource[0].start);
 
+	dev_dbg(dev, "PCI dev init successfully. Device mapped at: %016llx\n",
+		pdev->resource[0].start);
 	return 0;
 
 err_gpio_free:
@@ -238,12 +242,13 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 	priv = pci_get_drvdata(pdev);
 	shm = priv->remote_shm;
 
-	if (msg.size > MAX_BUFFER_SIZE)
+	if (msg->size > MAX_BUFFER_SIZE)
 		return -EMSGSIZE;
 
 	spin_lock_irqsave(&priv->spinlock, flags);
 	/* check if queue is full */
 	if (shm->write_index == shm->read_index + MAX_NO_BUFFERS) {
+		dev_dbg(&pdev->dev, "queue full");
 		spin_unlock_irqrestore(&priv->spinlock, flags);
 		return -ENOBUFS;
 	}
@@ -271,7 +276,7 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 	*(priv->qdma_regs + 7) = (u32)(shm_paddr +
 		offsetof(struct nxp_pci_shm, data) +
 		(shm->write_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE);
-	*(priv->qdma_regs + 8) = msg.size + NXP_PCI_TX_BUF_HEADROOM;
+	*(priv->qdma_regs + 8) = msg->size + NXP_PCI_TX_BUF_HEADROOM;
 
 	/* TODO: add retry counter or timeout */
 	while (1) {
@@ -299,6 +304,7 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 
 	spin_unlock_irqrestore(&priv->spinlock, flags);
 
+	dev_dbg(&pdev->dev, "pci dev mapped at %016llx\n", pdev->resource[0].start);
 	return 0;
 }
 

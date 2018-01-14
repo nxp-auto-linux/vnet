@@ -61,6 +61,8 @@ struct fpx_enet_private {
 
 	volatile void* received_data_l;
 	volatile void* received_data_r;
+
+	spinlock_t spinlock;
 };
 
 #endif /* FPX_H */
