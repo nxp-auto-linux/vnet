@@ -27,16 +27,6 @@
 #define LS2S32V_INT_PIN		434
 
 
-struct dma_desc {
-	unsigned int chan_ctrl;
-	unsigned int size;
-	unsigned int sar_low;
-	unsigned int sar_high;
-	unsigned int dar_low;
-	unsigned int dar_high;
-};
-
-
 struct control_ved
 {
 	volatile u64 current_write_index;

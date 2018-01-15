@@ -16,7 +16,8 @@
 
 #include "nxp-pci.h"
 
-#define PCI_RES_NAME "nxp-pci-dev"
+#define PCI_DEV_NAME "nxp-pci-dev"
+#define MEM_RES_NAME PCI_DEV_NAME"-pcie"
 #define BAR0 0
 
 static const struct pci_device_id pdev_ids[] = {
@@ -39,7 +40,7 @@ MODULE_DEVICE_TABLE(pci, pdev_ids);
 int nxp_pci_register_driver(struct pci_driver *drv)
 {
 	if (drv->name == NULL)
-		drv->name = "nxp-pci-dev";
+		drv->name = PCI_DEV_NAME;
 	drv->id_table = pdev_ids;
 	return pci_register_driver(drv);
 }
@@ -99,7 +100,7 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 		goto err_free_priv_data;
 	}
 
-	err = pci_request_regions(pdev, PCI_RES_NAME);
+	err = pci_request_regions(pdev, PCI_DEV_NAME);
 	if (err) {
 		dev_err(dev, "Error requesting pci region\n");
 		goto err_disable_pci;
@@ -117,13 +118,16 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 
 	/* alloc PCI local shared memory */
 	devm_request_mem_region(dev, LS_PCI_SMEM, LS_PCI_SMEM_SIZE,
-	                        "nxp-pci-local-shm");
+				MEM_RES_NAME);
 	priv->local_shm = (struct nxp_pci_shm *)ioremap_cache(LS_PCI_SMEM,
 	                                                      LS_PCI_SMEM_SIZE);
 	if (!priv->local_shm) {
 		err = -ENOMEM;
 		goto err_release_mem_region;
 	}
+	priv->local_shm->read_index = 0;
+	priv->local_shm->write_index = 0;
+	printk("%s, local data pointer = %p\n", __func__, &priv->local_shm->data_buf);
 
 	/* alloc PCI remote shared memory */
 	priv->remote_shm = (struct nxp_pci_shm *)pci_iomap(pdev, 0, io_len);
@@ -142,7 +146,7 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 
 	/* init rx interrupt */
 	err = request_irq(pdev->irq, nxp_pdev_rx_irq, IRQF_SHARED,
-				/*dev_name(&pdev->dev)*/ "nxp-pdev", pdev);
+			  PCI_DEV_NAME, pdev);
 	if (err) {
 		dev_err(&pdev->dev, "Request interrupt %d failed\n", pdev->irq);
 		goto err_pci_disable_msi;
@@ -226,33 +230,11 @@ void *nxp_pdev_get_upper_dev(struct pci_dev *pdev)
 {
 	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
 
+//	struct nxp_pci_shm *shm = priv->local_shm;
+//	printk("%s: write = %lld, read = %lld, data = llx\n",
+//	       __func__, shm->write_index, shm->read_index);
+
 	return priv->upper_ops->dev;
-}
-
-/**
- * nxp_pci_dev_register_rx_cb() - allocate an interrupt line
- * @pdev:	Interrupt line to allocate
- * @handler:	Function to be called when the rx IRQ occurs.
- * @dev_id:	A cookie passed back to the handler function
- */
-int nxp_pdev_register_rx_cb(struct pci_dev *pdev, irq_handler_t handler,
-			       void *arg)
-{
-	int err;
-
-	/* init rx interrupt */
-	err = request_irq(pdev->irq, handler, IRQF_SHARED,
-			  dev_name(&pdev->dev), arg);
-	if (err)
-		dev_err(&pdev->dev, "failed to register interrupt %d\n",
-			pdev->irq);
-
-	return err;
-}
-
-void nxp_pdev_unregister_rx_cb(struct pci_dev *pdev, void *dev_id)
-{
-	free_irq(pdev->irq, dev_id);
 }
 
 int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
@@ -305,7 +287,7 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 	/* TODO: use upper/lower_32_bits */
 	*(priv->qdma_regs + 6) = (u32)(shm_paddr >> 32);
 	*(priv->qdma_regs + 7) = (u32)(shm_paddr +
-		offsetof(struct nxp_pci_shm, data) +
+		offsetof(struct nxp_pci_shm, data_buf) +
 		(shm->write_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE);
 	*(priv->qdma_regs + 8) = msg->size + NXP_PCI_TX_BUF_HEADROOM;
 
@@ -334,8 +316,6 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 	gpio_set_value(LS2S32V_INT_PIN, priv->gpio_level);
 
 	spin_unlock_irqrestore(&priv->spinlock, flags);
-
-	dev_info(&pdev->dev, "pci dev mapped at %llx\n", pdev->resource[0].start);
 	return 0;
 }
 
@@ -343,9 +323,12 @@ int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 {
 	struct nxp_pdev_priv *priv;
 	struct nxp_pci_shm *shm;
+	u8 *start;
 
-	if (!pdev || !msg)
+	if (!pdev || !msg) {
+		dev_dbg(&pdev->dev, "invalid arguments");
 		return -EINVAL;
+	}
 
 	priv = pci_get_drvdata(pdev);
 	shm = priv->local_shm;
@@ -356,16 +339,23 @@ int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 		return -ENODATA;
 	}
 
+	printk("%s, read_index = %lld write_index = %lld\n", __func__, shm->read_index, shm->write_index);
+	printk("%s, start data pointer = %p\n", __func__, &shm->data_buf);
+
 	/* TODO: optimize mem usage: use write/read offset instead of index */
-	msg = (struct nxp_pdev_msg *) (shm->data +
-		(shm->read_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE);
+	start = ((u8 *) &shm->data_buf) +
+		(shm->read_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE;
+	printk("%s, current data pointer = %p\n", __func__, start);
+
+	msg->size = *((u16 *)start);
+	msg->data = start + NXP_PCI_TX_BUF_HEADROOM;
+	printk("%s, Frame size = %d\n", __func__, msg->size);
+	shm->read_index++;
 
 	if (msg->size > MAX_BUFFER_SIZE) {
 		dev_dbg(&pdev->dev, "rx message too large");
 		return -EIO;
 	}
-
-	shm->read_index++;
 
 	return 0;
 }

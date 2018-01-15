@@ -14,6 +14,7 @@
 #define MAX_BUFFER_SIZE		1536
 
 /* LS2084 shared memory in DDR visible by pci endpoint */
+/* TODO: read local shared mem addr from dts */
 #define LS_PCI_SMEM		0x83A0000000ULL
 #define LS_PCI_SMEM_SIZE	0x00400000	/* 4 MB */
 
@@ -28,8 +29,8 @@ struct nxp_pci_shm {
 	volatile u64 write_index;
 	volatile u64 read_index;
 	volatile u64 pad[6];
-	volatile void* data;
-};
+	volatile u8 *data_buf;
+}__packed;
 
 /**
  * struct nxp_pdev_priv - NXP generic PCI device
@@ -59,7 +60,7 @@ struct nxp_pdev_priv {
 #define NXP_PCI_TX_BUF_HEADROOM		2
 
 struct nxp_pdev_msg {
-	void *data;
+	u8 *data;
 	u16 size;
 };
 

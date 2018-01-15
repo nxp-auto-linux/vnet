@@ -120,8 +120,12 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 	write_i = fep->ctrl_ved_l->current_write_index;
 	read_i = fep->ctrl_ved_l->current_read_index;
 
+//	printk("%s, read_index = %lld write_index = %lld\n", __func__, fep->ctrl_ved_l->current_read_index, fep->ctrl_ved_l->current_write_index);
+//	printk("%s, start data pointer = %p\n", __func__, fep->received_data_l);
+
 	tmp_data = ((volatile void *)fep->received_data_l) +
 		((read_i & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE);
+//	printk("%s, current data pointer = %p\n", __func__, tmp_data);
 
 	while ((pkts < budget) && (write_i > read_i)) {
 		u16 buf_len;
@@ -299,11 +303,13 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 			"pcie-local-ctrl");
 
 	fep->ctrl_ved_l = (struct control_ved*)ioremap_cache(
-		LS_PCI_SMEM, (unsigned long)sizeof(struct control_ved));
+		LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
+	fep->received_data_l = (volatile void*)(fep->ctrl_ved_l + 1);
 
-	fep->received_data_l = (volatile u32*)ioremap_cache(
-		(resource_size_t)(LS_PCI_SMEM + sizeof(struct control_ved)),
-		LS_PCI_SMEM_SIZE - sizeof(struct control_ved));
+	fep->ctrl_ved_l->current_read_index = 0;
+	fep->ctrl_ved_l->current_write_index = 0;
+	printk("%s, read_index = %lld write_index = %lld\n", __func__, fep->ctrl_ved_l->current_read_index, fep->ctrl_ved_l->current_write_index);
+	printk("%s, local data pointer = %p\n", __func__, fep->received_data_l);
 
 	fep->ctrl_ved_r = (struct control_ved*)pci_iomap(pdev, 0, io_len);
 	fep->received_data_r = (volatile void*)(fep->ctrl_ved_r + 1);
@@ -370,7 +376,6 @@ err_init_qdma:
 	pci_disable_msi(pdev);
 err_pci_enable_msi:
 	iounmap((void*)fep->ctrl_ved_l);
-	iounmap((void*)fep->received_data_l);
 	release_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
 	pci_iounmap(pdev, fep->ctrl_ved_r);
 err_bad_pci_resource:
@@ -400,7 +405,6 @@ static void fpx_remove(struct pci_dev *pdev)
 	iounmap((void*)fep->qdma_regs);
 	pci_disable_msi(pdev);
 	iounmap((void*)fep->ctrl_ved_l);
-	iounmap((void*)fep->received_data_l);
 	release_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
 	pci_iounmap(pdev, fep->ctrl_ved_r);
 	pci_release_regions(pdev);

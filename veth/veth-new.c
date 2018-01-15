@@ -12,6 +12,7 @@
 #include "nxp-pci.h"
 
 #define DRIVER_NAME "nxp-veth"
+#define DEVICE_NAME "nve"	/* NXP virtual ethernet */
 
 struct veth_ndev_priv {
 	/* Hardware registers of the fpx device */
@@ -52,12 +53,13 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 {
 	struct net_device *ndev = napi->dev;
 	struct veth_ndev_priv *priv = netdev_priv(ndev);
-	int pkts = 0;
 	struct sk_buff *skb;
 	struct nxp_pdev_msg msg;
+	int pkts = 0;
 	int err = 0;
 
 	do {
+		printk("%s: pkts = %d, budget = %d\n", __func__, pkts, budget);
 		err = nxp_pdev_read_msg(priv->pci_dev, &msg);
 		if (err) {
 			if (err != -ENODATA)
@@ -99,6 +101,7 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 		/* reenable rx interrupt */
 		enable_irq(priv->pci_dev->irq);
 	}
+	netdev_err(ndev, "%s, packets = %d\n", __func__, pkts);
 	return pkts;
 }
 
@@ -120,7 +123,7 @@ static int veth_open(struct net_device *ndev)
 	enable_irq(priv->pci_dev->irq);
 	netif_tx_start_all_queues(ndev);
 
-	netdev_info(ndev, "Interface %s up\n", ndev->name);
+	netdev_info(ndev, "interface is up\n");
 	return 0;
 }
 
@@ -135,7 +138,8 @@ static int veth_close(struct net_device *ndev)
 	napi_disable(&priv->napi);
 	netif_tx_disable(ndev);
 
-	netdev_info(ndev, "Interface %s down\n", ndev->name);
+	netdev_info(ndev, "interface is down\n");
+	nxp_pdev_get_upper_dev(priv->pci_dev);
 	return 0;
 }
 
@@ -158,7 +162,7 @@ static int veth_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	struct veth_ndev_priv *priv = NULL;
 	int err = 0;
 
-	ndev = alloc_netdev(sizeof(struct veth_ndev_priv), "fpx%d",
+	ndev = alloc_netdev(sizeof(struct veth_ndev_priv), DEVICE_NAME"%d",
 				NET_NAME_ENUM, ether_setup);
 	if (!ndev) {
 		dev_err(&pdev->dev, "Error alloc_netdev.\n");
@@ -198,7 +202,7 @@ static int veth_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_napi_del;
 	}
 
-	netdev_info(ndev, "Interface probed successfully\n");
+	netdev_info(ndev, "interface probed successfully\n");
 	return 0;
 
 err_napi_del:
@@ -219,7 +223,7 @@ static void veth_remove(struct pci_dev *pdev)
 		return;
 	}
 
-	netdev_info(ndev, "Interface removed successfully\n");
+	netdev_info(ndev, "interface removed successfully\n");
 
 	unregister_netdev(ndev);
 	netif_napi_del(&priv->napi);
@@ -237,7 +241,7 @@ static struct pci_driver veth_driver = {
 
 static int __init veth_init(void)
 {
-	pr_info("driver init - v0.3\n");
+	pr_info("driver init - v0.6\n");
 	return nxp_pci_register_driver(&veth_driver);
 }
 
