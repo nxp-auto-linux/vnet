@@ -16,7 +16,7 @@
 
 #include "nxp-pci.h"
 
-#define PCI_RES_NAME "nxp-pci"
+#define PCI_RES_NAME "nxp-pci-dev"
 #define BAR0 0
 
 static const struct pci_device_id pdev_ids[] = {
@@ -83,7 +83,7 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 		return -EINVAL;
 
 	dev = &pdev->dev;
-	dev_dbg(dev, "Inir PCI dev: vendor = %04x, dev = %04x\n", pdev->vendor,
+	dev_dbg(dev, "Init PCI dev: vendor = %04x, dev = %04x\n", pdev->vendor,
 		pdev->device);
 
 	/* alloc private data struct */
@@ -107,8 +107,8 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 
 	/* read bar 0 length and flags */
 	io_len = pci_resource_len(pdev, BAR0);
-	dev_err(dev, "bar0 len = %u, flags = %lx\n", io_len,
-	       pci_resource_flags(pdev, BAR0)); /* TODO: remove after debug */
+	dev_info(dev, "bar0 len = %x, flags = %lx\n", io_len,
+	       pci_resource_flags(pdev, BAR0));
 	if (!(pci_resource_flags(pdev, BAR0) & IORESOURCE_MEM)) {
 		dev_err(dev, "Bad PCI resource\n");
 		err = -ENODEV;
@@ -142,7 +142,7 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 
 	/* init rx interrupt */
 	err = request_irq(pdev->irq, nxp_pdev_rx_irq, IRQF_SHARED,
-				dev_name(&pdev->dev), pdev);
+				/*dev_name(&pdev->dev)*/ "nxp-pdev", pdev);
 	if (err) {
 		dev_err(&pdev->dev, "Request interrupt %d failed\n", pdev->irq);
 		goto err_pci_disable_msi;
@@ -281,8 +281,11 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 		return -ENOBUFS;
 	}
 
-	start = (void *)msg;
+	start = (void *)(msg->data - NXP_PCI_TX_BUF_HEADROOM);
 	end = start + NXP_PCI_TX_BUF_HEADROOM + msg->size;
+
+	/* copy in-band message length */
+	*((u16 *)start) = msg->size;
 
 	__dma_flush_range((const void *)start, (const void *)end);
 
@@ -297,7 +300,7 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 	*(priv->qdma_regs + 4) = upper_32_bits(virt_to_phys(start)) & 0xffff;
 	*(priv->qdma_regs + 5) = lower_32_bits(virt_to_phys(start));
 
-	shm_paddr = priv->pci_dev->resource[0].start;
+	shm_paddr = pdev->resource[0].start;
 
 	/* TODO: use upper/lower_32_bits */
 	*(priv->qdma_regs + 6) = (u32)(shm_paddr >> 32);
@@ -332,7 +335,7 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 
 	spin_unlock_irqrestore(&priv->spinlock, flags);
 
-	dev_dbg(&pdev->dev, "pci dev mapped at %llx\n", pdev->resource[0].start);
+	dev_info(&pdev->dev, "pci dev mapped at %llx\n", pdev->resource[0].start);
 	return 0;
 }
 

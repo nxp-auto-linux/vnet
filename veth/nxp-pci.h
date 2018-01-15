@@ -59,8 +59,8 @@ struct nxp_pdev_priv {
 #define NXP_PCI_TX_BUF_HEADROOM		2
 
 struct nxp_pdev_msg {
-	u16 size;
 	void *data;
+	u16 size;
 };
 
 struct nxp_pdev_upper_ops {

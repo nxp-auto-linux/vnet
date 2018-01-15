@@ -31,8 +31,8 @@ static netdev_tx_t veth_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		goto err_out;
 	}
 
-	msg.size = skb->len;
 	msg.data = skb->data;
+	msg.size = skb->len;
 	err = nxp_pdev_write_msg(priv->pci_dev, &msg);
 	if (err) {
 		ndev->stats.tx_dropped++;
@@ -198,7 +198,7 @@ static int veth_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_napi_del;
 	}
 
-	netdev_info(ndev, "Interface %s probed successfully\n", ndev->name);
+	netdev_info(ndev, "Interface probed successfully\n");
 	return 0;
 
 err_napi_del:
@@ -219,7 +219,7 @@ static void veth_remove(struct pci_dev *pdev)
 		return;
 	}
 
-	netdev_info(ndev, "Interface %s removed successfully\n", ndev->name);
+	netdev_info(ndev, "Interface removed successfully\n");
 
 	unregister_netdev(ndev);
 	netif_napi_del(&priv->napi);
@@ -237,7 +237,7 @@ static struct pci_driver veth_driver = {
 
 static int __init veth_init(void)
 {
-	pr_info("driver init - v0.2\n");
+	pr_info("driver init - v0.3\n");
 	return nxp_pci_register_driver(&veth_driver);
 }
 
