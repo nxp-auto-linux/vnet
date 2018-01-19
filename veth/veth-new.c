@@ -12,7 +12,7 @@
 #include "nxp-pci.h"
 
 #define DRIVER_NAME "nxp-veth"
-#define DEVICE_NAME "nve"	/* NXP virtual ethernet */
+#define DEVICE_NAME "fpx"
 
 struct veth_ndev_priv {
 	/* Hardware registers of the fpx device */
@@ -28,7 +28,7 @@ static netdev_tx_t veth_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	int err;
 
 	if (unlikely(skb_headroom(skb) < NXP_PCI_TX_BUF_HEADROOM)) {
-		netdev_err(ndev, "Not enough head room\n");
+		netdev_dbg(ndev, "Not enough head room\n");
 		goto err_out;
 	}
 
@@ -59,7 +59,6 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 	int err = 0;
 
 	do {
-		printk("%s: pkts = %d, budget = %d\n", __func__, pkts, budget);
 		err = nxp_pdev_read_msg(priv->pci_dev, &msg);
 		if (err) {
 			if (err != -ENODATA)
@@ -73,8 +72,8 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 			continue;
 		}
 
-		/* TODO: check small performance improvement
-		 * update skb alloc size and buf_len check */
+		/* TODO: check perf impr: reserve NET_IP_ALIGN
+		 * must update skb alloc size and buf_len check too */
 		//skb_reserve(skb, NET_IP_ALIGN);
 
 		/* do memcpy */
@@ -83,8 +82,8 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 		memcpy(skb->data, msg.data, msg.size);
 		skb->protocol = eth_type_trans(skb, ndev);
 
-		/* TODO: check small performance improvement */
-		//skb->ip_summed = CHECKSUM_UNNECESSARY;
+		/* checksum not necessary on PCIe already handles this */
+		skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 		/* update RX stats */
 		ndev->stats.rx_packets++;
@@ -92,7 +91,7 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 
 		netif_receive_skb(skb);
 
-		/* TODO: check small performance improvement */
+		/* TODO: check perf impr: replace netif_receive_skb with: */
 		//napi_gro_receive(napi, skb);
 	} while (err != -ENODATA && ++pkts < budget);
 
@@ -101,7 +100,7 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 		/* reenable rx interrupt */
 		enable_irq(priv->pci_dev->irq);
 	}
-	netdev_err(ndev, "%s, packets = %d\n", __func__, pkts);
+
 	return pkts;
 }
 
@@ -241,7 +240,7 @@ static struct pci_driver veth_driver = {
 
 static int __init veth_init(void)
 {
-	pr_info("driver init - v0.6\n");
+	pr_info("driver init - v0.7\n");
 	return nxp_pci_register_driver(&veth_driver);
 }
 

@@ -127,7 +127,6 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 	}
 	priv->local_shm->read_index = 0;
 	priv->local_shm->write_index = 0;
-	printk("%s, local data pointer = %p\n", __func__, &priv->local_shm->data_buf);
 
 	/* alloc PCI remote shared memory */
 	priv->remote_shm = (struct nxp_pci_shm *)pci_iomap(pdev, 0, io_len);
@@ -229,10 +228,6 @@ void nxp_pdev_free(struct pci_dev *pdev)
 void *nxp_pdev_get_upper_dev(struct pci_dev *pdev)
 {
 	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
-
-//	struct nxp_pci_shm *shm = priv->local_shm;
-//	printk("%s: write = %lld, read = %lld, data = llx\n",
-//	       __func__, shm->write_index, shm->read_index);
 
 	return priv->upper_ops->dev;
 }
@@ -339,17 +334,12 @@ int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 		return -ENODATA;
 	}
 
-	printk("%s, read_index = %lld write_index = %lld\n", __func__, shm->read_index, shm->write_index);
-	printk("%s, start data pointer = %p\n", __func__, &shm->data_buf);
-
 	/* TODO: optimize mem usage: use write/read offset instead of index */
 	start = ((u8 *) &shm->data_buf) +
 		(shm->read_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE;
-	printk("%s, current data pointer = %p\n", __func__, start);
 
 	msg->size = *((u16 *)start);
 	msg->data = start + NXP_PCI_TX_BUF_HEADROOM;
-	printk("%s, Frame size = %d\n", __func__, msg->size);
 	shm->read_index++;
 
 	if (msg->size > MAX_BUFFER_SIZE) {
