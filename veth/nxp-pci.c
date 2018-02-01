@@ -20,6 +20,56 @@
 #define MEM_RES_NAME PCI_DEV_NAME"-pcie"
 #define BAR0 0
 
+/* TODO: buffer size (and number?) should be configurable on pdev init */
+#define MAX_NO_BUFFERS		512
+#define MAX_BUFFER_SIZE		1536
+
+/* LS2084 shared memory in DDR visible by pci endpoint */
+/* TODO: read local shared mem addr from dts */
+#define LS_PCI_SMEM		0x83A0000000ULL
+#define LS_PCI_SMEM_SIZE	0x00400000	/* 4 MB */
+
+#define QDMA_BASE		0x8390100
+#define QDMA_REG_SIZE		0x100
+
+#define LS2S32V_INT_PIN		434	/* GPIO interrupt pin */
+
+/**
+ * struct nxp_pci_shm - shared memory queue
+ *
+ * @write_index:	write index (head)
+ * @read_index:		read index (tail)
+ * @pad:		padding for DMA memory allignment of data_buf
+ * @data_buf:		data buffer
+ */
+/* TODO: test w/o volatile (may need memory barriers) */
+/* TODO: change read/write index to u32 and update padding */
+struct nxp_pci_shm {
+	volatile u64 write_index;
+	volatile u64 read_index;
+	volatile u64 pad[6];
+	volatile u8 *data_buf;
+}__packed;
+
+/**
+ * struct nxp_pdev_priv - NXP generic PCI device
+ *
+ * @pci_dev:	PCI device structure
+ * @upper_ops:	specific device built on nxp_pdev (i.e., net dev, tty dev, etc)
+ */
+struct nxp_pdev_priv {
+	struct pci_dev *pci_dev;
+	struct nxp_pdev_upper_ops *upper_ops;
+
+	volatile u32* qdma_regs;
+	u32 gpio_level;
+
+	struct nxp_pci_shm *local_shm;
+	struct nxp_pci_shm *remote_shm;
+
+	spinlock_t spinlock;
+};
+
 static const struct pci_device_id pdev_ids[] = {
 	{
 		PCI_DEVICE(0x1957, 0x4001)
@@ -93,6 +143,7 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 		return -ENOMEM;
 	}
 	priv->pci_dev = pdev;
+	priv->upper_ops = upper_ops;
 
 	err = pci_enable_device(pdev);
 	if (err) {
@@ -143,22 +194,12 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 		goto err_pci_unmap;
 	}
 
-	/* init rx interrupt */
-	err = request_irq(pdev->irq, nxp_pdev_rx_irq, IRQF_SHARED,
-			  PCI_DEV_NAME, pdev);
-	if (err) {
-		dev_err(&pdev->dev, "Request interrupt %d failed\n", pdev->irq);
-		goto err_pci_disable_msi;
-	}
-	/* disable rx intr until upper dev is ready to receive data) */
-	disable_irq(pdev->irq);
-
 	/* init qdma for tx */ /* TODO: try remove cast from all ioremap */
 	priv->qdma_regs = (u32*)ioremap_nocache(QDMA_BASE, QDMA_REG_SIZE);
 	if (!priv->qdma_regs) {
 		dev_err(dev, "Cannot map qdma registers\n");
 		err = -ENOMEM;
-		goto err_free_irq;
+		goto err_pci_disable_msi;
 	}
 
 	/* init tx gpio signaling interrupt */
@@ -176,9 +217,18 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 		goto err_gpio_free;
 	}
 
+	/* init rx interrupt */
+	err = request_irq(pdev->irq, nxp_pdev_rx_irq, IRQF_SHARED,
+			  PCI_DEV_NAME, pdev);
+	if (err) {
+		dev_err(&pdev->dev, "Request interrupt %d failed\n", pdev->irq);
+		goto err_gpio_free;
+	}
+	/* disable rx intr until upper dev is ready to receive data) */
+	disable_irq(pdev->irq);
+
 	spin_lock_init(&priv->spinlock);
 
-	priv->upper_ops = upper_ops;
 	pci_set_drvdata(pdev, priv);
 
 	dev_dbg(dev, "PCI dev init successfully. Device mapped at: %016llx\n",
@@ -189,8 +239,6 @@ err_gpio_free:
 	gpio_free(LS2S32V_INT_PIN);
 err_qdma_unmap:
 	iounmap(priv->qdma_regs);
-err_free_irq:
-	free_irq(pdev->irq, pdev);
 err_pci_disable_msi:
 	pci_disable_msi(pdev);
 err_pci_unmap:
@@ -213,9 +261,9 @@ void nxp_pdev_free(struct pci_dev *pdev)
 {
 	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
 
+	free_irq(pdev->irq, pdev);
 	gpio_free(LS2S32V_INT_PIN);
 	iounmap(priv->qdma_regs);
-	free_irq(pdev->irq, pdev);
 	pci_disable_msi(pdev);
 	pci_iounmap(pdev, priv->remote_shm);
 	iounmap(priv->local_shm);

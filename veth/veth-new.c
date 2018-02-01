@@ -10,12 +10,13 @@
 #include <linux/skbuff.h>
 #include <linux/pci.h>
 #include "nxp-pci.h"
+#include <asm/cacheflush.h>
+#include <linux/gpio.h>
 
 #define DRIVER_NAME "nxp-veth"
 #define DEVICE_NAME "fpx"
 
 struct veth_ndev_priv {
-	/* Hardware registers of the fpx device */
 	struct pci_dev *pci_dev;
 	struct net_device *netdev;
 	struct napi_struct napi;
@@ -76,10 +77,10 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 		 * must update skb alloc size and buf_len check too */
 		//skb_reserve(skb, NET_IP_ALIGN);
 
-		/* do memcpy */
+		/* copy data in skb */
 		skb_put(skb, msg.size);
-
 		memcpy(skb->data, msg.data, msg.size);
+
 		skb->protocol = eth_type_trans(skb, ndev);
 
 		/* checksum not necessary on PCIe already handles this */
@@ -240,7 +241,7 @@ static struct pci_driver veth_driver = {
 
 static int __init veth_init(void)
 {
-	pr_info("driver init - v0.7\n");
+	pr_info("driver init - v0.16\n");
 	return nxp_pci_register_driver(&veth_driver);
 }
 

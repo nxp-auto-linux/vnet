@@ -341,7 +341,6 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		printk(KERN_ERR"Cannot configure GPIO LS2S32V_INT_PIN as output\n");
 		goto err_gpio_direction_output;
 	}
-	pci_set_drvdata (pdev, ndev);
 
 	/* init rx napi */
 	netif_napi_add(ndev, &fep->napi, fpx_enet_rx_napi, NAPI_POLL_WEIGHT);
@@ -359,6 +358,9 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		printk(KERN_ERR"Error registering netdevice\n");
 		goto err_register_netdev;
 	}
+
+	spin_lock_init(&fep->spinlock);
+	pci_set_drvdata (pdev, ndev);
 
 	printk(KERN_ERR"Success %016llx\n", pdev->resource[0].start);
 

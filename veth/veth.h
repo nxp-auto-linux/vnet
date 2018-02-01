@@ -53,8 +53,6 @@ struct fpx_enet_private {
 	volatile void* received_data_r;
 
 	spinlock_t spinlock;
-
-	u32 rx_irq_count;
 };
 
 #endif /* FPX_H */
