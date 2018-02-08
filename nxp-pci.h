@@ -9,8 +9,8 @@
 #ifndef DRIVERS_NET_VPCIE_VPCIE_VPCIE_H_
 #define DRIVERS_NET_VPCIE_PCIE_VPCIE_H_
 
-/* head room used to store in-band data length */
-#define NXP_PCI_TX_BUF_HEADROOM 2
+/* head room used to insert in-band data length */
+#define NXP_PCI_MSG_HEADROOM 2
 
 /**
  * struct nxp_pdev_msg - pci device message

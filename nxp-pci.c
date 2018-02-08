@@ -15,6 +15,7 @@
 #include <asm/cacheflush.h>
 
 #include "nxp-pci.h"
+#include "platform.h"
 
 #define PCI_DEV_NAME "nxp-pci-dev"
 #define MEM_RES_NAME PCI_DEV_NAME"-pcie"
@@ -29,21 +30,15 @@
 #define LS_PCI_SMEM		0x83A0000000ULL
 #define LS_PCI_SMEM_SIZE	0x00400000	/* 4 MB */
 
-#define QDMA_BASE		0x8390100
-#define QDMA_REG_SIZE		0x100
-
-#define LS2S32V_INT_PIN		434	/* GPIO interrupt pin */
-
 /**
  * struct nxp_pci_shm - shared memory queue
- *
  * @write_index:	write index (head)
  * @read_index:		read index (tail)
- * @pad:		padding for DMA memory allignment of data_buf
+ * @pad:		padding for DMA memory alignment of data_buf
  * @data_buf:		data buffer
  */
 /* TODO: test w/o volatile (may need memory barriers) */
-/* TODO: change read/write index to u32 and update padding */
+/* TODO: try remove padding as 16-byte alignment might be enough */
 struct nxp_pci_shm {
 	volatile u64 write_index;
 	volatile u64 read_index;
@@ -53,21 +48,23 @@ struct nxp_pci_shm {
 
 /**
  * struct nxp_pdev_priv - NXP generic PCI device
- *
  * @pci_dev:	PCI device structure
  * @upper_ops:	specific device built on nxp_pdev (i.e., net dev, tty dev, etc)
+ * @local_shm:	local shared memory queue
+ * @remote_shm:	remote shared memory queue
+ * @spinlock:	used to sync access to shared memory
+ * @platform:	platform specific object
  */
 struct nxp_pdev_priv {
 	struct pci_dev *pci_dev;
 	struct nxp_pdev_upper_ops *upper_ops;
 
-	volatile u32* qdma_regs;
-	u32 gpio_level;
-
 	struct nxp_pci_shm *local_shm;
 	struct nxp_pci_shm *remote_shm;
 
 	spinlock_t spinlock;
+
+	void *platform;
 };
 
 static const struct pci_device_id pdev_ids[] = {
@@ -120,6 +117,7 @@ static irqreturn_t nxp_pdev_rx_irq(int irq, void *dev_instance)
 /**
  * nxp_pdev_init - unregister a pci driver
  * @drv: the driver structure to unregister
+ * @upper_ops:
  *
  * This is a wrapper over pci_unregister_driver().
  */
@@ -194,27 +192,10 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 		goto err_pci_unmap;
 	}
 
-	/* init qdma for tx */ /* TODO: try remove cast from all ioremap */
-	priv->qdma_regs = (u32*)ioremap_nocache(QDMA_BASE, QDMA_REG_SIZE);
-	if (!priv->qdma_regs) {
+	err = nxp_pfm_init(&priv->platform);
+	if (err) {
 		dev_err(dev, "Cannot map qdma registers\n");
-		err = -ENOMEM;
 		goto err_pci_disable_msi;
-	}
-
-	/* init tx gpio signaling interrupt */
-	priv->gpio_level = 0;
-	err = gpio_request(LS2S32V_INT_PIN, "LS2_S32V_INT");
-	if (err) {
-		dev_err(dev, "Cannot reserve GPIO LS2S32V_INT_PIN\n");
-		err = -ENODEV;
-		goto err_qdma_unmap;
-	}
-	err = gpio_direction_output(LS2S32V_INT_PIN, 0);
-	if (err) {
-		dev_err(dev, "Cannot set GPIO LS2S32V_INT_PIN as output\n");
-		err = -ENODEV;
-		goto err_gpio_free;
 	}
 
 	/* init rx interrupt */
@@ -222,7 +203,7 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 			  PCI_DEV_NAME, pdev);
 	if (err) {
 		dev_err(&pdev->dev, "Request interrupt %d failed\n", pdev->irq);
-		goto err_gpio_free;
+		goto err_platform_free;
 	}
 	/* disable rx intr until upper dev is ready to receive data) */
 	disable_irq(pdev->irq);
@@ -235,10 +216,8 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 		pdev->resource[0].start);
 	return 0;
 
-err_gpio_free:
-	gpio_free(LS2S32V_INT_PIN);
-err_qdma_unmap:
-	iounmap(priv->qdma_regs);
+err_platform_free:
+	nxp_pfm_free(priv->platform);
 err_pci_disable_msi:
 	pci_disable_msi(pdev);
 err_pci_unmap:
@@ -262,8 +241,8 @@ void nxp_pdev_free(struct pci_dev *pdev)
 	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
 
 	free_irq(pdev->irq, pdev);
-	gpio_free(LS2S32V_INT_PIN);
-	iounmap(priv->qdma_regs);
+//	gpio_free(LS2S32V_INT_PIN);
+	nxp_pfm_free(priv->platform);
 	pci_disable_msi(pdev);
 	pci_iounmap(pdev, priv->remote_shm);
 	iounmap(priv->local_shm);
@@ -280,14 +259,22 @@ void *nxp_pdev_get_upper_dev(struct pci_dev *pdev)
 	return priv->upper_ops->dev;
 }
 
+/**
+ * nxp_pdev_write_msg - write message to remote
+ * @pdev:	pci device
+ * @msg:	message to be written
+ *
+ * Return:	0 on success, error code otherwise
+ */
 int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 {
 	struct nxp_pdev_priv *priv;
 	struct nxp_pci_shm *shm;
-	phys_addr_t shm_paddr;
+	phys_addr_t dest_addr;
 	unsigned long flags;
-	void *start, *end;
-	u32 status = 0;
+	void *src_addr;
+	u32 dma_size;
+	int err = 0;
 
 	if (!pdev || !msg)
 		return -EINVAL;
@@ -306,58 +293,27 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 		return -ENOBUFS;
 	}
 
-	start = (void *)(msg->data - NXP_PCI_TX_BUF_HEADROOM);
-	end = start + NXP_PCI_TX_BUF_HEADROOM + msg->size;
-
-	/* copy in-band message length */
-	*((u16 *)start) = msg->size;
-
-	__dma_flush_range((const void *)start, (const void *)end);
-
-	/* TODO: cleanup code; move qdma stuff to a separate function? */
-	*priv->qdma_regs &= ~1;
-
-	status = *(priv->qdma_regs + 1) & 0x92;
-	if (status)
-		*(priv->qdma_regs + 1) = status;
-
-	/* TODO: Ask Radu why & 0xffff */
-	*(priv->qdma_regs + 4) = upper_32_bits(virt_to_phys(start)) & 0xffff;
-	*(priv->qdma_regs + 5) = lower_32_bits(virt_to_phys(start));
-
-	shm_paddr = pdev->resource[0].start;
-
-	/* TODO: use upper/lower_32_bits */
-	*(priv->qdma_regs + 6) = (u32)(shm_paddr >> 32);
-	*(priv->qdma_regs + 7) = (u32)(shm_paddr +
+	src_addr = (void *)(msg->data - NXP_PCI_MSG_HEADROOM);
+	dma_size = NXP_PCI_MSG_HEADROOM + msg->size;
+	dest_addr = pdev->resource[0].start +
 		offsetof(struct nxp_pci_shm, data_buf) +
-		(shm->write_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE);
-	*(priv->qdma_regs + 8) = msg->size + NXP_PCI_TX_BUF_HEADROOM;
+		(shm->write_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE;
 
-	/* TODO: add retry counter or timeout */
-	while (1) {
-		/* TODO: should this be |= ? */
-		*priv->qdma_regs = 1;
+	/* insert in-band message length */
+	*((u16 *)src_addr) = msg->size;	/* TODO: handle endianess */
 
-		do {
-			status = *(priv->qdma_regs + 1);
-		} while (status & (1 << 2));
-
-		if (!(status & (1 << 7)))
-			break;
-
-		/* TODO: we don't need this? */
-		*(priv->qdma_regs + 1) = status;
-		*priv->qdma_regs &= ~1;
-		// redo tx
-	}
+	err = nxp_pfm_dma_write(priv->platform, src_addr, dest_addr, dma_size);
+	if (err)
+		goto err_unlock;
 
 	shm->write_index++;
 
 	/* Send data available notification to remote peer */
-	priv->gpio_level ^= 1;
-	gpio_set_value(LS2S32V_INT_PIN, priv->gpio_level);
+	nxp_pfm_trigger_remote_irq(priv->platform);
+//	priv->gpio_level ^= 1;
+//	gpio_set_value(LS2S32V_INT_PIN, priv->gpio_level);
 
+err_unlock:
 	spin_unlock_irqrestore(&priv->spinlock, flags);
 	return 0;
 }
@@ -387,7 +343,7 @@ int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 		(shm->read_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE;
 
 	msg->size = *((u16 *)start);
-	msg->data = start + NXP_PCI_TX_BUF_HEADROOM;
+	msg->data = start + NXP_PCI_MSG_HEADROOM;
 	shm->read_index++;
 
 	if (msg->size > MAX_BUFFER_SIZE) {

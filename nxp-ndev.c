@@ -10,15 +10,16 @@
 #include <linux/skbuff.h>
 #include <linux/pci.h>
 #include "nxp-pci.h"
-#include <asm/cacheflush.h>
-#include <linux/gpio.h>
 
 #define DRIVER_NAME "nxp-veth"
 #define DEVICE_NAME "fpx"
 
+MODULE_AUTHOR("NXP");
+MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:"DRIVER_NAME);
+
 struct veth_ndev_priv {
 	struct pci_dev *pci_dev;
-	struct net_device *netdev;
 	struct napi_struct napi;
 };
 
@@ -28,7 +29,16 @@ static netdev_tx_t veth_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	struct nxp_pdev_msg msg;
 	int err;
 
-	if (unlikely(skb_headroom(skb) < NXP_PCI_TX_BUF_HEADROOM)) {
+	/* TODO: QDMA requires addresses to be 4-byte aligned. This works now
+	 * because the network stack aligns IP headers at 16 bytes, so eth
+	 * frame (skb->data) is 2-byte aligned. This plus the 2-byte in-band
+	 * length inserted in the head-room makes the DMA addr 4-byte aligned.
+	 *
+	 * The proper impl is to reserve a larger headroom, left-align the
+	 * address to be DMA-ed and insert also the data offset in the
+	 * message after the in-band length.
+	 */
+	if (unlikely(skb_headroom(skb) < NXP_PCI_MSG_HEADROOM)) {
 		netdev_dbg(ndev, "Not enough head room\n");
 		goto err_out;
 	}
@@ -139,7 +149,6 @@ static int veth_close(struct net_device *ndev)
 	netif_tx_disable(ndev);
 
 	netdev_info(ndev, "interface is down\n");
-	nxp_pdev_get_upper_dev(priv->pci_dev);
 	return 0;
 }
 
@@ -172,7 +181,7 @@ static int veth_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	ndev->flags = 0;
 	ndev->priv_flags &= ~IFF_TX_SKB_SHARING;
 	ndev->netdev_ops = &netdev_ops;
-	ndev->needed_headroom = NXP_PCI_TX_BUF_HEADROOM;
+	ndev->needed_headroom = NXP_PCI_MSG_HEADROOM;
 
 	ndev->dev_addr[0] = 0x88;
 	ndev->dev_addr[1] = 0x01;
@@ -184,7 +193,6 @@ static int veth_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	SET_NETDEV_DEV(ndev, &pdev->dev);
 
 	priv = netdev_priv(ndev);
-	priv->netdev = ndev;
 	priv->pci_dev = pdev;
 
 	pci_ops.dev = ndev;
@@ -241,7 +249,7 @@ static struct pci_driver veth_driver = {
 
 static int __init veth_init(void)
 {
-	pr_info("driver init - v0.16\n");
+	pr_info("driver init - v0.23\n");
 	return nxp_pci_register_driver(&veth_driver);
 }
 
@@ -253,6 +261,3 @@ static void __exit veth_exit(void)
 
 module_init(veth_init);
 module_exit(veth_exit);
-
-MODULE_ALIAS("platform:"DRIVER_NAME);
-MODULE_LICENSE("GPL");

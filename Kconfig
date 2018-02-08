@@ -1,4 +1,31 @@
-config VETH_LS2
-	tristate "LS2085A platform - virtual ethernet driver support"
+config NXP_VETH
+	tristate "NXP virtual ethernet driver support"
 	help
-	 Enable or disable virtual ethernet driver support for LS2085A board. To compile this driver as a module, choose 'M'.
+	Enable or disable virtual ethernet driver support. To compile this driver as a module, choose 'M'.
+
+if NXP_VETH
+
+choice
+	prompt "Select Virtual Ethernet Platform"
+	default NXP_VETH_BBMINI
+
+config NXP_VETH_BBMINI
+	bool "LS2084 <--PCIe--> S32V234 (BlueBox-Mini)"
+	---help---
+	  Compile virtual ethernet for BlueBox-Mini board: LS2084 communicating
+	  over PCIe to S32V234
+
+config NXP_VETH_LS1043_CM7FPGA
+	bool "LS1043 <--PCIe--> CM7-FPGA"
+	---help---
+	  Compile virtual ethernet for LS1043 board communicating over PCIe
+	  to a CortexM7-FPGA board
+
+endchoice
+
+endif # NXP_VETH
+
+#config NXP_VTTY
+#	tristate "NXP Virtual TTY driver support"
+#	help
+#	Enable or disable virtual TTY driver support. To compile this driver as a module, choose 'M'.
