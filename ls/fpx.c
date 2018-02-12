@@ -29,7 +29,7 @@
 
 #define DRIVER_NAME	"fpx"
 
-extern void __dma_flush_range(const void *, const void *);
+extern void __dma_flush_area(const void *, size_t);
 
 static netdev_tx_t
 fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
@@ -51,10 +51,9 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	else {
 		u32 status = 0;
 		void* start = (skb->data - sizeof(u32));
-		void* end = start + (u32)skb->len + sizeof(u32);
 
 		*(u32*)(skb->data - sizeof(u32)) = (u32)skb->len;
-		__dma_flush_range((const void*)start, (const void*)end);
+		__dma_flush_area(start, skb->len + sizeof(u32));
 
 		*fep->qdma_regs &= ~1;
 		status = *(fep->qdma_regs + 1) & 0x92;
