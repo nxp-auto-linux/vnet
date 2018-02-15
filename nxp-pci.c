@@ -241,7 +241,6 @@ void nxp_pdev_free(struct pci_dev *pdev)
 	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
 
 	free_irq(pdev->irq, pdev);
-//	gpio_free(LS2S32V_INT_PIN);
 	nxp_pfm_free(priv->platform);
 	pci_disable_msi(pdev);
 	pci_iounmap(pdev, priv->remote_shm);
@@ -266,7 +265,8 @@ void *nxp_pdev_get_upper_dev(struct pci_dev *pdev)
  *
  * Return:	0 on success, error code otherwise
  */
-int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
+int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg,
+			void *tx_done_arg)
 {
 	struct nxp_pdev_priv *priv;
 	struct nxp_pci_shm *shm;
@@ -285,7 +285,15 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 	if (msg->size > MAX_BUFFER_SIZE)
 		return -EMSGSIZE;
 
+	src_addr = (void *)(msg->data - NXP_PCI_MSG_HEADROOM);
+	dma_size = NXP_PCI_MSG_HEADROOM + msg->size;
+
+	/* insert in-band message length */
+	*((u16 *)src_addr) = msg->size;	/* TODO: handle endianess */
+
+	/* lock shared mem queue access */
 	spin_lock_irqsave(&priv->spinlock, flags);
+
 	/* check if queue is full */
 	if (shm->write_index == shm->read_index + MAX_NO_BUFFERS) {
 		dev_dbg(&pdev->dev, "queue full");
@@ -293,14 +301,9 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 		return -ENOBUFS;
 	}
 
-	src_addr = (void *)(msg->data - NXP_PCI_MSG_HEADROOM);
-	dma_size = NXP_PCI_MSG_HEADROOM + msg->size;
 	dest_addr = pdev->resource[0].start +
 		offsetof(struct nxp_pci_shm, data_buf) +
 		(shm->write_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE;
-
-	/* insert in-band message length */
-	*((u16 *)src_addr) = msg->size;	/* TODO: handle endianess */
 
 	err = nxp_pfm_dma_write(priv->platform, src_addr, dest_addr, dma_size);
 	if (err)
@@ -308,16 +311,30 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 
 	shm->write_index++;
 
+	spin_unlock_irqrestore(&priv->spinlock, flags);
+
 	/* Send data available notification to remote peer */
 	nxp_pfm_trigger_remote_irq(priv->platform);
-//	priv->gpio_level ^= 1;
-//	gpio_set_value(LS2S32V_INT_PIN, priv->gpio_level);
+
+	/* Notify caller that write operation is completed.
+	 * TODO: move this notification in DMA done notification from platform*/
+	if (likely(priv->upper_ops->tx_done_cb))
+		priv->upper_ops->tx_done_cb(priv->upper_ops->dev, tx_done_arg);
+
+	return 0;
 
 err_unlock:
 	spin_unlock_irqrestore(&priv->spinlock, flags);
-	return 0;
+	return err;
 }
 
+/**
+ * nxp_pdev_read_msg - read message from remote
+ * @pdev:	pci device
+ * @msg:	message to be read
+ *
+ * Return:	0 on success, error code otherwise
+ */
 int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 {
 	struct nxp_pdev_priv *priv;

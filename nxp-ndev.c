@@ -23,41 +23,36 @@ struct veth_ndev_priv {
 	struct napi_struct napi;
 };
 
-static netdev_tx_t veth_start_xmit(struct sk_buff *skb, struct net_device *ndev)
+static netdev_tx_t veth_start_tx(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct veth_ndev_priv *priv = netdev_priv(ndev);
 	struct nxp_pdev_msg msg;
 	int err;
 
-	/* TODO: QDMA requires addresses to be 4-byte aligned. This works now
-	 * because the network stack aligns IP headers at 16 bytes, so eth
-	 * frame (skb->data) is 2-byte aligned. This plus the 2-byte in-band
-	 * length inserted in the head-room makes the DMA addr 4-byte aligned.
-	 *
-	 * The proper impl is to reserve a larger headroom, left-align the
-	 * address to be DMA-ed and insert also the data offset in the
-	 * message after the in-band length.
-	 */
-	if (unlikely(skb_headroom(skb) < NXP_PCI_MSG_HEADROOM)) {
-		netdev_dbg(ndev, "Not enough head room\n");
-		goto err_out;
-	}
-
 	msg.data = skb->data;
 	msg.size = skb->len;
-	err = nxp_pdev_write_msg(priv->pci_dev, &msg);
+	err = nxp_pdev_write_msg(priv->pci_dev, &msg, skb);
 	if (err) {
 		ndev->stats.tx_dropped++;
 		goto err_out;
 	}
 
 	ndev->stats.tx_packets++;
-	ndev->stats.tx_bytes += skb->len;
-
-err_out:
-	dev_kfree_skb_any(skb);
+	ndev->stats.tx_bytes += msg.size;
 
 	return NETDEV_TX_OK;
+
+err_out:
+	dev_kfree_skb(skb);
+
+	return NETDEV_TX_OK;
+}
+
+static void veth_tx_done(void *dev, void *arg)
+{
+	struct sk_buff *skb = (struct sk_buff *)arg;
+
+	dev_kfree_skb_any(skb);
 }
 
 static int veth_rx_napi(struct napi_struct *napi, int budget)
@@ -93,7 +88,7 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 
 		skb->protocol = eth_type_trans(skb, ndev);
 
-		/* checksum not necessary on PCIe already handles this */
+		/* checksum not necessary as PCIe already handles this */
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 		/* update RX stats */
@@ -155,14 +150,14 @@ static int veth_close(struct net_device *ndev)
 static const struct net_device_ops netdev_ops = {
 	.ndo_open		= veth_open,
 	.ndo_stop		= veth_close,
-	.ndo_start_xmit		= veth_start_xmit,
+	.ndo_start_xmit		= veth_start_tx,
 	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
 };
 
 static struct nxp_pdev_upper_ops pci_ops = {
 	.rx_irq_cb = veth_rx_irq,
-	.tx_done_cb = NULL,
+	.tx_done_cb = veth_tx_done,
 };
 
 static int veth_probe(struct pci_dev *pdev, const struct pci_device_id *id)
@@ -181,6 +176,16 @@ static int veth_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	ndev->flags = 0;
 	ndev->priv_flags &= ~IFF_TX_SKB_SHARING;
 	ndev->netdev_ops = &netdev_ops;
+
+	/* TODO: QDMA requires addresses to be 4-byte aligned. This works now
+	 * because the network stack aligns IP headers at 16 bytes, so eth
+	 * frame (skb->data) is 2-byte aligned. This plus the 2-byte in-band
+	 * length inserted in the head-room makes the DMA addr 4-byte aligned.
+	 *
+	 * The proper impl is to reserve a larger headroom, left-align the
+	 * address to be DMA-ed and insert also the data offset in the
+	 * message after the in-band length.
+	 */
 	ndev->needed_headroom = NXP_PCI_MSG_HEADROOM;
 
 	ndev->dev_addr[0] = 0x88;
@@ -249,7 +254,7 @@ static struct pci_driver veth_driver = {
 
 static int __init veth_init(void)
 {
-	pr_info("driver init - v0.23\n");
+	pr_info("driver init - v0.25\n");
 	return nxp_pci_register_driver(&veth_driver);
 }
 
