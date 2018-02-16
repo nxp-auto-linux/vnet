@@ -1,8 +1,8 @@
-# Copyright 2018 NXP
 #
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License version 2 as
-# published by the Free Software Foundation.
+# Copyright (C) 2018 NXP Semiconductors
+#
+# SPDX-License-Identifier:		BSD-3-Clause
+#
 
 ifdef CONFIG_NXP_VETH
 obj-$(CONFIG_NXP_VETH) += nxp-veth.o

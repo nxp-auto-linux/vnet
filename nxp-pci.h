@@ -1,11 +1,8 @@
 /*
- * Copyright 2018 NXP
+ * Copyright (C) 2018 NXP Semiconductors
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * SPDX-License-Identifier:		BSD-3-Clause
  */
-
 #ifndef DRIVERS_NET_VPCIE_VPCIE_VPCIE_H_
 #define DRIVERS_NET_VPCIE_PCIE_VPCIE_H_
 
