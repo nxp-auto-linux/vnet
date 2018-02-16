@@ -8,21 +8,37 @@
 #include <linux/kernel.h>
 #include "platform.h"
 
-int nxp_pfm_dma_init(void *dma)
+int nxp_pfm_init(void **platform)
 {
-	/* DMA supported not implemented*/
+	/* platform supported not implemented*/
 	return -EOPNOTSUPP;
 }
 
-void nxp_pdev_dma_free(void **dma)
+void nxp_pfm_free(void *platform)
 {
-	/* DMA supported not implemented*/
-	return;
+	/* platform supported not implemented*/
 }
 
-int nxp_pdev_dma_write(void *dma, void *src_addr, phys_addr_t dest_addr,
+void __iomem *nxp_pfm_alloc_local_shm(void *dev)
+{
+	/* platform supported not implemented*/
+	return NULL;
+}
+
+void nxp_pfm_free_local_shm(void *dev, void __iomem *addr)
+{
+	/* platform supported not implemented*/
+}
+
+int nxp_pfm_dma_write(void *platform, void *src_addr, phys_addr_t dest_addr,
 			u32 size)
 {
-	/* DMA supported not implemented*/
+	/* platform supported not implemented*/
+	return -EOPNOTSUPP;
+}
+
+int nxp_pfm_trigger_remote_irq(void *platform)
+{
+	/* platform supported not implemented*/
 	return -EOPNOTSUPP;
 }

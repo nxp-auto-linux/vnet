@@ -7,28 +7,18 @@
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/ioport.h>
 #include <linux/pci.h>
-#include <linux/slab.h>
 #include <linux/interrupt.h>
-#include <linux/gpio.h>
-#include <asm/cacheflush.h>
 
 #include "nxp-pci.h"
 #include "platform.h"
 
 #define PCI_DEV_NAME "nxp-pci-dev"
-#define MEM_RES_NAME PCI_DEV_NAME"-pcie"
 #define BAR0 0
 
 /* TODO: buffer size (and number?) should be configurable on pdev init */
 #define MAX_NO_BUFFERS		512
 #define MAX_BUFFER_SIZE		1536
-
-/* LS2084 shared memory in DDR visible by pci endpoint */
-/* TODO: read local shared mem addr from dts */
-#define LS_PCI_SMEM		0x83A0000000ULL
-#define LS_PCI_SMEM_SIZE	0x00400000	/* 4 MB */
 
 /**
  * struct nxp_pci_shm - shared memory queue
@@ -59,8 +49,8 @@ struct nxp_pdev_priv {
 	struct pci_dev *pci_dev;
 	struct nxp_pdev_upper_ops *upper_ops;
 
-	struct nxp_pci_shm *local_shm;
-	struct nxp_pci_shm *remote_shm;
+	volatile struct nxp_pci_shm *local_shm;
+	volatile struct nxp_pci_shm *remote_shm;
 
 	spinlock_t spinlock;
 
@@ -93,7 +83,7 @@ int nxp_pci_register_driver(struct pci_driver *drv)
 }
 
 /**
- * pci_unregister_driver - unregister a pci driver
+ * nxp_pci_unregister_driver - unregister a pci driver
  * @drv: the driver structure to unregister
  *
  * This is a wrapper over pci_unregister_driver().
@@ -117,7 +107,7 @@ static irqreturn_t nxp_pdev_rx_irq(int irq, void *dev_instance)
 /**
  * nxp_pdev_init - unregister a pci driver
  * @drv: the driver structure to unregister
- * @upper_ops:
+ * @upper_ops: pci upper dev operations (see struct nxp_pdev_upper_ops)
  *
  * This is a wrapper over pci_unregister_driver().
  */
@@ -143,10 +133,16 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 	priv->pci_dev = pdev;
 	priv->upper_ops = upper_ops;
 
+	/* init platform specifics: DMA, remote kick interrupt */
+	err = nxp_pfm_init(&priv->platform);
+	if (err)
+		goto err_free_priv_data;
+
+	/* init PCI specifics */
 	err = pci_enable_device(pdev);
 	if (err) {
 		dev_err(dev, "Error enabling PCI device\n");
-		goto err_free_priv_data;
+		goto err_platform_free;
 	}
 
 	err = pci_request_regions(pdev, PCI_DEV_NAME);
@@ -165,23 +161,20 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 		goto err_pci_release_regions;
 	}
 
-	/* alloc PCI local shared memory */
-	devm_request_mem_region(dev, LS_PCI_SMEM, LS_PCI_SMEM_SIZE,
-				MEM_RES_NAME);
-	priv->local_shm = (struct nxp_pci_shm *)ioremap_cache(LS_PCI_SMEM,
-	                                                      LS_PCI_SMEM_SIZE);
+	/* alloc local shared memory (platform dependent: PCI or DDR) */
+	priv->local_shm = (struct nxp_pci_shm *)nxp_pfm_alloc_local_shm(pdev);
 	if (!priv->local_shm) {
 		err = -ENOMEM;
-		goto err_release_mem_region;
+		goto err_pci_release_regions;
 	}
 	priv->local_shm->read_index = 0;
 	priv->local_shm->write_index = 0;
 
-	/* alloc PCI remote shared memory */
+	/* alloc remote shared memory (PCI) */
 	priv->remote_shm = (struct nxp_pci_shm *)pci_iomap(pdev, 0, io_len);
 	if (!priv->remote_shm) {
 		err = -ENOMEM;
-		goto err_unmap;
+		goto err_free_local_shm;
 	}
 
 	pci_set_master(pdev);
@@ -189,13 +182,7 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 	err = pci_enable_msi(pdev);
 	if (err) {
 		dev_err(dev, "Error enabling PCI MSI\n");
-		goto err_pci_unmap;
-	}
-
-	err = nxp_pfm_init(&priv->platform);
-	if (err) {
-		dev_err(dev, "Cannot map qdma registers\n");
-		goto err_pci_disable_msi;
+		goto err_free_remote_shm;
 	}
 
 	/* init rx interrupt */
@@ -203,7 +190,7 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 			  PCI_DEV_NAME, pdev);
 	if (err) {
 		dev_err(&pdev->dev, "Request interrupt %d failed\n", pdev->irq);
-		goto err_platform_free;
+		goto err_pci_disable_msi;
 	}
 	/* disable rx intr until upper dev is ready to receive data) */
 	disable_irq(pdev->irq);
@@ -216,20 +203,18 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 		pdev->resource[0].start);
 	return 0;
 
-err_platform_free:
-	nxp_pfm_free(priv->platform);
 err_pci_disable_msi:
 	pci_disable_msi(pdev);
-err_pci_unmap:
-	pci_iounmap(pdev, priv->remote_shm);
-err_unmap:
-	iounmap(priv->local_shm);
-err_release_mem_region:
-	devm_release_mem_region(dev, LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
+err_free_remote_shm:
+	pci_iounmap(pdev, (void *)priv->remote_shm);
+err_free_local_shm:
+	nxp_pfm_free_local_shm(pdev, (void *)priv->local_shm);
 err_pci_release_regions:
 	pci_release_regions(pdev);
 err_disable_pci:
 	pci_disable_device(pdev);
+err_platform_free:
+	nxp_pfm_free(priv->platform);
 err_free_priv_data:
 	kfree(priv);
 
@@ -241,13 +226,12 @@ void nxp_pdev_free(struct pci_dev *pdev)
 	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
 
 	free_irq(pdev->irq, pdev);
-	nxp_pfm_free(priv->platform);
 	pci_disable_msi(pdev);
-	pci_iounmap(pdev, priv->remote_shm);
-	iounmap(priv->local_shm);
-	devm_release_mem_region(&pdev->dev, LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
+	pci_iounmap(pdev, (void *)priv->remote_shm);
+	nxp_pfm_free_local_shm(pdev, (void *)priv->local_shm);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
+	nxp_pfm_free(priv->platform);
 	kfree(priv);
 }
 
@@ -269,7 +253,7 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg,
 			void *tx_done_arg)
 {
 	struct nxp_pdev_priv *priv;
-	struct nxp_pci_shm *shm;
+	volatile struct nxp_pci_shm *shm;
 	phys_addr_t dest_addr;
 	unsigned long flags;
 	void *src_addr;
@@ -338,7 +322,7 @@ err_unlock:
 int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 {
 	struct nxp_pdev_priv *priv;
-	struct nxp_pci_shm *shm;
+	volatile struct nxp_pci_shm *shm;
 	u8 *start;
 
 	if (!pdev || !msg) {

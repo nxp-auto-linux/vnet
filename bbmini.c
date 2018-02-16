@@ -8,6 +8,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/io.h>
+#include <linux/ioport.h>
 #include <linux/gpio.h>
 #include <asm/cacheflush.h>
 
@@ -17,6 +18,12 @@
 #define QDMA_REG_SIZE		0x100
 
 #define LS2S32V_INT_PIN		434	/* GPIO interrupt pin */
+
+/* LS2084 shared memory in DDR visible to remote endpoint */
+/* TODO: read local shared mem addr from dts */
+#define LS_PCI_SMEM		0x83A0000000ULL
+#define LS_PCI_SMEM_SIZE	0x00400000	/* 4 MB */
+#define SMEM_RES_NAME		"ls2084-shm"
 
 
 /**
@@ -92,6 +99,18 @@ void nxp_pfm_free(void *platform)
 	iounmap(priv->qdma_regs);
 
 	kfree(priv);
+}
+
+void __iomem *nxp_pfm_alloc_local_shm(void *dev)
+{
+	request_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE, SMEM_RES_NAME);
+	return ioremap_cache(LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
+}
+
+void nxp_pfm_free_local_shm(void *dev, void __iomem *addr)
+{
+	iounmap(addr);
+	release_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
 }
 
 /**

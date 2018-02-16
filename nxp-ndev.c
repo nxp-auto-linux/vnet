@@ -254,7 +254,7 @@ static struct pci_driver veth_driver = {
 
 static int __init veth_init(void)
 {
-	pr_info("driver init - v0.25\n");
+	pr_info("driver init - v0.28\n");
 	return nxp_pci_register_driver(&veth_driver);
 }
 
