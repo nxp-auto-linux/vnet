@@ -101,8 +101,8 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 
 	if (pkts < budget) {
 		napi_complete(napi);
-		/* reenable rx interrupt */
-		enable_irq(priv->pci_dev->irq);
+		/* re-enable rx interrupt */
+		nxp_pdev_enable_rx_irq(priv->pci_dev);
 	}
 
 	return pkts;
@@ -114,7 +114,8 @@ static void veth_rx_irq(void *dev)
 	struct veth_ndev_priv *priv = netdev_priv(ndev);
 
 	/* disable rx interrupt before napi schedule */
-	disable_irq_nosync(priv->pci_dev->irq);
+	nxp_pdev_disable_rx_irq(priv->pci_dev);
+
 	napi_schedule(&priv->napi);
 }
 
@@ -123,7 +124,7 @@ static int veth_open(struct net_device *ndev)
 	struct veth_ndev_priv *priv = netdev_priv(ndev);
 
 	napi_enable(&priv->napi);
-	enable_irq(priv->pci_dev->irq);
+	nxp_pdev_enable_rx_irq(priv->pci_dev);
 	netif_tx_start_all_queues(ndev);
 
 	netdev_info(ndev, "interface is up\n");
@@ -134,7 +135,7 @@ static int veth_close(struct net_device *ndev)
 {
 	struct veth_ndev_priv *priv = netdev_priv(ndev);
 
-	disable_irq(priv->pci_dev->irq);
+	nxp_pdev_disable_rx_irq(priv->pci_dev);
 	/* wait for all pending rx frames to be processed by napi */
 	msleep(500);
 
@@ -252,7 +253,7 @@ static struct pci_driver veth_driver = {
 
 static int __init veth_init(void)
 {
-	pr_info("driver init - v0.28\n");
+	pr_info("driver init - v0.29\n");
 	return nxp_pci_register_driver(&veth_driver);
 }
 

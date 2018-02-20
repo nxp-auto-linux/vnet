@@ -47,10 +47,12 @@ struct nxp_pdev_priv {
 	struct pci_dev *pci_dev;
 	struct nxp_pdev_upper_ops *upper_ops;
 
-	volatile struct nxp_pci_shm *local_shm;
-	volatile struct nxp_pci_shm *remote_shm;
+	struct nxp_pci_shm *local_shm;
+	struct nxp_pci_shm *remote_shm;
 
 	spinlock_t spinlock;
+
+	int rx_irq_enable;
 
 	void *platform;
 };
@@ -96,7 +98,7 @@ static irqreturn_t nxp_pdev_rx_irq(int irq, void *dev_instance)
 	struct pci_dev *pdev = (struct pci_dev *)dev_instance;
 	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
 
-	if (priv->upper_ops->rx_irq_cb)
+	if (priv->rx_irq_enable)
 		priv->upper_ops->rx_irq_cb(priv->upper_ops->dev);
 
 	return IRQ_HANDLED;
@@ -116,7 +118,8 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 	u32 io_len;
 	int err;
 
-	if (!pdev || !upper_ops)
+	if (!pdev || !upper_ops
+		|| !upper_ops->rx_irq_cb || !upper_ops->tx_done_cb)
 		return -EINVAL;
 
 	dev = &pdev->dev;
@@ -184,14 +187,12 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 	}
 
 	/* init rx interrupt */
-	err = request_irq(pdev->irq, nxp_pdev_rx_irq, IRQF_SHARED,
+	err = request_irq(pdev->irq, nxp_pdev_rx_irq, 0,
 			  PCI_DEV_NAME, pdev);
 	if (err) {
 		dev_err(&pdev->dev, "Request interrupt %d failed\n", pdev->irq);
 		goto err_pci_disable_msi;
 	}
-	/* disable rx intr until upper dev is ready to receive data) */
-	disable_irq(pdev->irq);
 
 	spin_lock_init(&priv->spinlock);
 
@@ -204,9 +205,9 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 err_pci_disable_msi:
 	pci_disable_msi(pdev);
 err_free_remote_shm:
-	pci_iounmap(pdev, (void *)priv->remote_shm);
+	pci_iounmap(pdev, priv->remote_shm);
 err_free_local_shm:
-	nxp_pfm_free_local_shm(pdev, (void *)priv->local_shm);
+	nxp_pfm_free_local_shm(pdev, priv->local_shm);
 err_pci_release_regions:
 	pci_release_regions(pdev);
 err_disable_pci:
@@ -225,8 +226,8 @@ void nxp_pdev_free(struct pci_dev *pdev)
 
 	free_irq(pdev->irq, pdev);
 	pci_disable_msi(pdev);
-	pci_iounmap(pdev, (void *)priv->remote_shm);
-	nxp_pfm_free_local_shm(pdev, (void *)priv->local_shm);
+	pci_iounmap(pdev, priv->remote_shm);
+	nxp_pfm_free_local_shm(pdev, priv->local_shm);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
 	nxp_pfm_free(priv->platform);
@@ -300,8 +301,7 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg,
 
 	/* Notify caller that write operation is completed.
 	 * TODO: move this notification in DMA done notification from platform*/
-	if (likely(priv->upper_ops->tx_done_cb))
-		priv->upper_ops->tx_done_cb(priv->upper_ops->dev, tx_done_arg);
+	priv->upper_ops->tx_done_cb(priv->upper_ops->dev, tx_done_arg);
 
 	return 0;
 
@@ -351,4 +351,34 @@ int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 	}
 
 	return 0;
+}
+
+/**
+ * nxp_pdev_enable_rx_irq - disable rx interrupt
+ * @pdev:	pci device
+ */
+void nxp_pdev_disable_rx_irq(struct pci_dev *pdev)
+{
+	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
+
+	priv->rx_irq_enable = 0;
+
+	/* TODO: The right implementation would be to tell the remote device
+	 * to stop sending interrupts, through a control flag in the shared
+	 * memory. */
+}
+
+/**
+ * nxp_pdev_enable_rx_irq - enable rx interrupt
+ * @pdev:	pci device
+ */
+void nxp_pdev_enable_rx_irq(struct pci_dev *pdev)
+{
+	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
+
+	priv->rx_irq_enable = 1;
+
+	/* TODO: The right implementation would be to tell the remote device
+	 * to start sending interrupts, through a control flag in the shared
+	 * memory. */
 }

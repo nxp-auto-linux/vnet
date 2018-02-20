@@ -49,4 +49,7 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg,
 			void *tx_done_arg);
 int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg);
 
+void nxp_pdev_disable_rx_irq(struct pci_dev *pdev);
+void nxp_pdev_enable_rx_irq(struct pci_dev *pdev);
+
 #endif /* DRIVERS_NET_VPCIE_VPCIE_VPCIE_H_ */
