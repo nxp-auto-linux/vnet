@@ -11,8 +11,8 @@ nxp-veth-objs := nxp-ndev.o nxp-pci.o
 
 ifeq ($(CONFIG_NXP_VETH_BBMINI),y)
 nxp-veth-objs += bbmini.o
-else ifeq ($(CONFIG_NXP_VETH_LS1043_CM7FPGA),y)
-nxp-veth-objs += ls1043-cm7fpga.o
+else ifeq ($(CONFIG_NXP_VETH_LS1043_S32GFPGA),y)
+nxp-veth-objs += ls1043-s32gfpga.o
 endif
 
 endif #CONFIG_NXP_VETH

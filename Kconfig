@@ -13,13 +13,13 @@ config NXP_VETH_BBMINI
 	bool "LS2084 <--PCIe--> S32V234 (BlueBox-Mini)"
 	---help---
 	  Compile virtual ethernet for BlueBox-Mini board: LS2084 communicating
-	  over PCIe to S32V234
+	  over PCIe with S32V234
 
-config NXP_VETH_LS1043_CM7FPGA
-	bool "LS1043 <--PCIe--> CM7-FPGA"
+config NXP_VETH_LS1043_S32GFPGA
+	bool "LS1043 <--PCIe--> S32G-FPGA"
 	---help---
 	  Compile virtual ethernet for LS1043 board communicating over PCIe
-	  to a CortexM7-FPGA board
+	  with a S32G-FPGA board
 
 endchoice
 
