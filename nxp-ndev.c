@@ -24,19 +24,18 @@ struct veth_ndev_priv {
 static netdev_tx_t veth_start_tx(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct veth_ndev_priv *priv = netdev_priv(ndev);
-	struct nxp_pdev_msg msg;
+	/* save skb len for updating stats as skb might be release by then */
+	u32 skb_len = skb->len;
 	int err;
 
-	msg.data = skb->data;
-	msg.size = skb->len;
-	err = nxp_pdev_write_msg(priv->pci_dev, &msg, skb);
+	err = nxp_pdev_write(priv->pci_dev, skb->data, skb->len, skb);
 	if (err) {
 		ndev->stats.tx_dropped++;
 		goto err_out;
 	}
 
 	ndev->stats.tx_packets++;
-	ndev->stats.tx_bytes += msg.size;
+	ndev->stats.tx_bytes += skb_len;
 
 	return NETDEV_TX_OK;
 
@@ -58,19 +57,20 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 	struct net_device *ndev = napi->dev;
 	struct veth_ndev_priv *priv = netdev_priv(ndev);
 	struct sk_buff *skb;
-	struct nxp_pdev_msg msg;
+	void *buf;
+	u16 size;
 	int pkts = 0;
 	int err = 0;
 
 	do {
-		err = nxp_pdev_read_msg(priv->pci_dev, &msg);
+		err = nxp_pdev_read(priv->pci_dev, &buf, &size);
 		if (err) {
 			if (err != -ENODATA)
 				ndev->stats.rx_errors++;
 			continue;
 		}
 
-		skb = napi_alloc_skb(napi, msg.size);
+		skb = napi_alloc_skb(napi, size);
 		if (unlikely(!skb)) {
 			ndev->stats.rx_dropped++;
 			continue;
@@ -81,8 +81,8 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 		//skb_reserve(skb, NET_IP_ALIGN);
 
 		/* copy data in skb */
-		skb_put(skb, msg.size);
-		memcpy(skb->data, msg.data, msg.size);
+		skb_put(skb, size);
+		memcpy(skb->data, buf, size);
 
 		skb->protocol = eth_type_trans(skb, ndev);
 
@@ -91,7 +91,7 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 
 		/* update RX stats */
 		ndev->stats.rx_packets++;
-		ndev->stats.rx_bytes += msg.size;
+		ndev->stats.rx_bytes += size;
 
 		netif_receive_skb(skb);
 
@@ -176,15 +176,7 @@ static int veth_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	ndev->priv_flags &= ~IFF_TX_SKB_SHARING;
 	ndev->netdev_ops = &netdev_ops;
 
-	/* TODO: QDMA requires addresses to be 4-byte aligned. This works now
-	 * because the network stack aligns IP headers at 16 bytes, so eth
-	 * frame (skb->data) is 2-byte aligned. This plus the 2-byte in-band
-	 * length inserted in the head-room makes the DMA addr 4-byte aligned.
-	 *
-	 * The proper impl is to reserve a larger headroom, left-align the
-	 * address to be DMA-ed and insert also the data offset in the
-	 * message after the in-band length.
-	 */
+	/* head-room needed by PCI dev to insert in-band data length */
 	ndev->needed_headroom = NXP_PCI_MSG_HEADROOM;
 
 	ndev->dev_addr[0] = 0x88;
@@ -253,7 +245,7 @@ static struct pci_driver veth_driver = {
 
 static int __init veth_init(void)
 {
-	pr_info("driver init - v0.29\n");
+	pr_info("driver init - v0.30\n");
 	return nxp_pci_register_driver(&veth_driver);
 }
 

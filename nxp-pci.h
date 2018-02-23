@@ -6,29 +6,22 @@
 #ifndef DRIVERS_NET_VPCIE_VPCIE_VPCIE_H_
 #define DRIVERS_NET_VPCIE_PCIE_VPCIE_H_
 
-/* head room used to insert in-band data length */
-#define NXP_PCI_MSG_HEADROOM 2
-
-/**
- * struct nxp_pdev_msg - pci device message
+/* head-room used to insert in-band data length in front of the message */
+/* TODO: some DMA controllers (QDMA) requires addresses to be 4-byte aligned.
+ * This head-room works for now because the network stack aligns IP headers at
+ * 16 bytes, so eth frame (skb->data) is 2-byte aligned. This plus the 2-byte
+ * in-band length inserted in the head-room makes the DMA addr 4-byte aligned.
  *
- * @data:	message buffer pointer
- * @size:	message size
- * @tx_done_arg: argument used for tx done callback notification
- *
- * Used by read/write API to package data buffer and its size.
- * An example for using tx_done_arg is when an upper net dev wants to know
- * which skb to release when tx is done.
+ * The proper implementation for other upper devices (e.g. tty) is to reserve
+ * a larger head-room, left-align the address to be DMA-ed and insert also the
+ * data offset in the message after in-band length.
  */
-struct nxp_pdev_msg {
-	u8 *data;
-	u16 size;
-};
+#define NXP_PCI_MSG_HEADROOM 2
 
 /**
  * struct nxp_pdev_upper_ops - pci upper dev operations
  *
- * @dev:	pointer to upper device
+ * @dev:	upper device pointer/cookie
  * @rx_irq_cb:	receive notification callback
  * @tx_done_cb:	transmit completed notification callback
  */
@@ -45,9 +38,9 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops);
 void nxp_pdev_free(struct pci_dev *pdev);
 void *nxp_pdev_get_upper_dev(struct pci_dev *pdev);
 
-int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg,
+int nxp_pdev_write(struct pci_dev *pdev, void *buf, u16 size,
 			void *tx_done_arg);
-int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg);
+int nxp_pdev_read(struct pci_dev *pdev, void **buf, u16 *size);
 
 void nxp_pdev_disable_rx_irq(struct pci_dev *pdev);
 void nxp_pdev_enable_rx_irq(struct pci_dev *pdev);

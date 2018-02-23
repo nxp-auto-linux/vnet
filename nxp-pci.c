@@ -15,7 +15,7 @@
 #define BAR0 0
 
 /* TODO: buffer size (and number?) should be configurable on pdev init */
-#define MAX_NO_BUFFERS		512
+#define MAX_BUFFERS_NUM		512
 #define MAX_BUFFER_SIZE		1536
 
 /**
@@ -93,6 +93,7 @@ void nxp_pci_unregister_driver(struct pci_driver *drv)
 	pci_unregister_driver(drv);
 }
 
+/* pci dev interrupt handler */
 static irqreturn_t nxp_pdev_rx_irq(int irq, void *dev_instance)
 {
 	struct pci_dev *pdev = (struct pci_dev *)dev_instance;
@@ -105,11 +106,11 @@ static irqreturn_t nxp_pdev_rx_irq(int irq, void *dev_instance)
 }
 
 /**
- * nxp_pdev_init - unregister a pci driver
- * @drv: the driver structure to unregister
- * @upper_ops: pci upper dev operations (see struct nxp_pdev_upper_ops)
+ * nxp_pdev_init - initialize the pci device
+ * @pdev:	pci device
+ * @upper_ops:	pci upper dev operations (see struct nxp_pdev_upper_ops)
  *
- * This is a wrapper over pci_unregister_driver().
+ * Return:	0 on success, error code otherwise
  */
 int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 {
@@ -172,7 +173,7 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 	priv->local_shm->write_index = 0;
 
 	/* alloc remote shared memory (PCI) */
-	priv->remote_shm = (struct nxp_pci_shm *)pci_iomap(pdev, 0, io_len);
+	priv->remote_shm = (struct nxp_pci_shm *)pci_iomap(pdev, BAR0, io_len);
 	if (!priv->remote_shm) {
 		err = -ENOMEM;
 		goto err_free_local_shm;
@@ -220,6 +221,10 @@ err_free_priv_data:
 	return err;
 }
 
+/**
+ * nxp_pdev_free - release the pci device
+ * @pdev:	pci device
+ */
 void nxp_pdev_free(struct pci_dev *pdev)
 {
 	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
@@ -234,6 +239,12 @@ void nxp_pdev_free(struct pci_dev *pdev)
 	kfree(priv);
 }
 
+/**
+ * nxp_pdev_get_upper_dev - return upper dev pointer/cookie
+ * @pdev:	pci device
+ *
+ * Return:	upper dev pointer
+ */
 void *nxp_pdev_get_upper_dev(struct pci_dev *pdev)
 {
 	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
@@ -242,13 +253,15 @@ void *nxp_pdev_get_upper_dev(struct pci_dev *pdev)
 }
 
 /**
- * nxp_pdev_write_msg - write message to remote
+ * nxp_pdev_write_msg - write data to remote
  * @pdev:	pci device
- * @msg:	message to be written
+ * @buf:	buffer to be written
+ * @size:	size of buffer to be written
+ * @tx_done_arg: argument used for tx done callback notification
  *
  * Return:	0 on success, error code otherwise
  */
-int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg,
+int nxp_pdev_write(struct pci_dev *pdev, void *buf, u16 size,
 			void *tx_done_arg)
 {
 	struct nxp_pdev_priv *priv;
@@ -259,26 +272,26 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg,
 	u32 dma_size;
 	int err = 0;
 
-	if (!pdev || !msg)
+	if (!pdev || !buf)
 		return -EINVAL;
 
 	priv = pci_get_drvdata(pdev);
 	shm = priv->remote_shm;
 
-	if (msg->size > MAX_BUFFER_SIZE)
+	if (size > MAX_BUFFER_SIZE)
 		return -EMSGSIZE;
 
-	src_addr = (void *)(msg->data - NXP_PCI_MSG_HEADROOM);
-	dma_size = NXP_PCI_MSG_HEADROOM + msg->size;
+	src_addr = buf - NXP_PCI_MSG_HEADROOM;
+	dma_size = NXP_PCI_MSG_HEADROOM + size;
 
 	/* insert in-band message length */
-	*((u16 *)src_addr) = msg->size;	/* TODO: handle endianess */
+	*((u16 *)src_addr) = size;	/* TODO: handle endianess */
 
 	/* lock shared mem queue access */
 	spin_lock_irqsave(&priv->spinlock, flags);
 
 	/* check if queue is full */
-	if (shm->write_index == shm->read_index + MAX_NO_BUFFERS) {
+	if (shm->write_index == shm->read_index + MAX_BUFFERS_NUM) {
 		dev_dbg(&pdev->dev, "queue full");
 		spin_unlock_irqrestore(&priv->spinlock, flags);
 		return -ENOBUFS;
@@ -286,7 +299,7 @@ int nxp_pdev_write_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg,
 
 	dest_addr = pdev->resource[0].start +
 		offsetof(struct nxp_pci_shm, data_buf) +
-		(shm->write_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE;
+		(shm->write_index & (MAX_BUFFERS_NUM - 1)) * MAX_BUFFER_SIZE;
 
 	err = nxp_pfm_dma_write(priv->platform, src_addr, dest_addr, dma_size);
 	if (err)
@@ -311,19 +324,20 @@ err_unlock:
 }
 
 /**
- * nxp_pdev_read_msg - read message from remote
+ * nxp_pdev_read_msg - read data from remote
  * @pdev:	pci device
- * @msg:	message to be read
+ * @buf:	pointer to the buffer received
+ * @size:	received size
  *
  * Return:	0 on success, error code otherwise
  */
-int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
+int nxp_pdev_read(struct pci_dev *pdev, void **buf, u16 *size)
 {
 	struct nxp_pdev_priv *priv;
 	volatile struct nxp_pci_shm *shm;
 	u8 *start;
 
-	if (!pdev || !msg) {
+	if (!pdev || !buf || !size) {
 		dev_dbg(&pdev->dev, "invalid arguments");
 		return -EINVAL;
 	}
@@ -339,13 +353,13 @@ int nxp_pdev_read_msg(struct pci_dev *pdev, struct nxp_pdev_msg *msg)
 
 	/* TODO: optimize mem usage: use write/read offset instead of index */
 	start = ((u8 *) &shm->data_buf) +
-		(shm->read_index & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE;
+		(shm->read_index & (MAX_BUFFERS_NUM - 1)) * MAX_BUFFER_SIZE;
 
-	msg->size = *((u16 *)start);
-	msg->data = start + NXP_PCI_MSG_HEADROOM;
+	*size = *((u16 *)start);
+	*buf = start + NXP_PCI_MSG_HEADROOM;
 	shm->read_index++;
 
-	if (msg->size > MAX_BUFFER_SIZE) {
+	if (unlikely(*size > MAX_BUFFER_SIZE)) {
 		dev_dbg(&pdev->dev, "rx message too large");
 		return -EIO;
 	}
