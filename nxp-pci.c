@@ -11,8 +11,8 @@
 #include "nxp-pci.h"
 #include "platform.h"
 
-#define PCI_DEV_NAME "nxp-pci-dev"
-#define BAR0 0
+#define PCI_DEV_NAME "nxp-pci-vdev"
+#define BAR_NUM 0
 
 /* TODO: buffer size (and number?) should be configurable on pdev init */
 #define MAX_BUFFERS_NUM		512
@@ -116,7 +116,6 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 {
 	struct device *dev;
 	struct nxp_pdev_priv *priv;
-	u32 io_len;
 	int err;
 
 	if (!pdev || !upper_ops
@@ -153,16 +152,6 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 		goto err_disable_pci;
 	}
 
-	/* read bar 0 length and flags */
-	io_len = pci_resource_len(pdev, BAR0);
-	dev_info(dev, "bar0 len = %x, flags = %lx\n", io_len,
-	       pci_resource_flags(pdev, BAR0));
-	if (!(pci_resource_flags(pdev, BAR0) & IORESOURCE_MEM)) {
-		dev_err(dev, "Bad PCI resource\n");
-		err = -ENODEV;
-		goto err_pci_release_regions;
-	}
-
 	/* alloc local shared memory (platform dependent: PCI or DDR) */
 	priv->local_shm = (struct nxp_pci_shm *)nxp_pfm_alloc_local_shm(pdev);
 	if (!priv->local_shm) {
@@ -172,8 +161,8 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 	priv->local_shm->read_index = 0;
 	priv->local_shm->write_index = 0;
 
-	/* alloc remote shared memory (PCI) */
-	priv->remote_shm = (struct nxp_pci_shm *)pci_iomap(pdev, BAR0, io_len);
+	/* alloc remote shared memory (platform dependent: PCI or DDR) */
+	priv->remote_shm = (struct nxp_pci_shm *)nxp_pfm_alloc_remote_shm(pdev);
 	if (!priv->remote_shm) {
 		err = -ENOMEM;
 		goto err_free_local_shm;
@@ -206,7 +195,7 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 err_pci_disable_msi:
 	pci_disable_msi(pdev);
 err_free_remote_shm:
-	pci_iounmap(pdev, priv->remote_shm);
+	nxp_pfm_free_remote_shm(pdev, priv->remote_shm);
 err_free_local_shm:
 	nxp_pfm_free_local_shm(pdev, priv->local_shm);
 err_pci_release_regions:
@@ -231,7 +220,7 @@ void nxp_pdev_free(struct pci_dev *pdev)
 
 	free_irq(pdev->irq, pdev);
 	pci_disable_msi(pdev);
-	pci_iounmap(pdev, priv->remote_shm);
+	nxp_pfm_free_remote_shm(pdev, priv->remote_shm);
 	nxp_pfm_free_local_shm(pdev, priv->local_shm);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
