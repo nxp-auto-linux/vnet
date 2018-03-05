@@ -40,6 +40,12 @@
 #if MSI_WORKAROUND
 	#define S32V2LS_INT_PIN		27
 #endif
+
+#define MAGIC_VAL_RC            0x12abdfcbed540312ULL
+#define MAGIC_OFFSET            4
+#define ADDRESS_OFFSET          5
+
+
 struct dma_desc {
 	unsigned int chan_ctrl;
 	unsigned int size;

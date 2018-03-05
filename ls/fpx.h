@@ -37,6 +37,10 @@
 #endif
 
 
+#define MAGIC_VAL_RC			0x12abdfcbed540312ULL
+#define MAGIC_OFFSET			4
+#define ADDRESS_OFFSET			5
+
 struct dma_desc {
 	unsigned int chan_ctrl;
 	unsigned int size;
@@ -64,9 +68,6 @@ struct fpx_enet_private {
 	struct napi_struct napi;
 
 	spinlock_t spinlock;
-
-	struct resource *local_res;
-	struct resource *remote_res;
 
 	struct sk_buff *sk_buff_queue_rx[SKBUF_Q_SIZE];
 	int rx_sk_buff_index;

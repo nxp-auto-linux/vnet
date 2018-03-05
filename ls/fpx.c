@@ -25,6 +25,11 @@
 #include <linux/pci.h>
 #include <asm/cacheflush.h>
 #include <linux/gpio.h>
+
+#if 0
+#include <linux/dma-mapping.h>
+#endif
+
 #include "fpx.h"
 
 #define DRIVER_NAME	"fpx"
@@ -235,8 +240,13 @@ fpx_enet_open(struct net_device *ndev)
 	}
 
 #if !(MSI_WORKAROUND)
-	if (request_irq(fep->pci_dev->irq, fpx_interrupt, IRQF_SHARED, ndev->name, ndev)) {
-		printk(KERN_ERR"failed to register interrupt %d\n", fep->pci_dev->irq);
+	{
+		int irq = pci_irq_vector(fep->pci_dev, 0);
+		if (0 < irq) {
+			if (request_irq(irq, fpx_interrupt, IRQF_SHARED, ndev->name, ndev)) {
+				printk(KERN_ERR"failed to register interrupt %d\n", fep->pci_dev->irq);
+			}
+		}
 	}
 #endif
 	napi_enable(&fep->napi);
@@ -355,10 +365,8 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto err_pci_request_regions;
 	}
 
-	/////////////////////////////////////////////////
 	io_len = pci_resource_len(pdev, 0);		//read bar 0
 	ret = pci_resource_flags(pdev, 0);
-	printk(KERN_ERR"bar0 len = %lu, %08x\n", io_len, ret);
 
 	if (!(ret & IORESOURCE_MEM)) {
 		printk(KERN_ERR"Bad PCI resource\n");
@@ -366,28 +374,37 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto err_bad_pci_resource;
 	}
 	/* alloc memory */
-	fep->local_res = request_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE,
-			"pcie-local-ctrl");
+	fep->ctrl_ved_l = (struct control_ved*)kmalloc(LS_PCI_SMEM_SIZE, GFP_ATOMIC);
+	fep->received_data_l = (volatile u32*)(fep->ctrl_ved_l + 1);
 
-	fep->ctrl_ved_l = (struct control_ved*)ioremap_cache(
-		LS_PCI_SMEM, (unsigned long)sizeof(struct control_ved));
-
-	fep->received_data_l = (volatile u32*)ioremap_cache(
-		(resource_size_t)(LS_PCI_SMEM + sizeof(struct control_ved)),
-		LS_PCI_SMEM_SIZE - sizeof(struct control_ved));
-
+	/* remote device */
 	fep->ctrl_ved_r = (struct control_ved*)pci_iomap(pdev, 0, io_len);
 	fep->received_data_r = (volatile void*)(fep->ctrl_ved_r + 1);
-
 	pci_set_master (pdev);
-
-	ret = pci_enable_msi(pdev);
-
-	if (ret) {
-		printk(KERN_ERR"Error enabling PCI MSI\n");
+	if (fep->ctrl_ved_l) {
+		fep->ctrl_ved_r->val[MAGIC_OFFSET] = MAGIC_VAL_RC;
+#if 1
+		/* send buffer address to EP */
+		fep->ctrl_ved_r->val[ADDRESS_OFFSET] = 
+			(u64)virt_to_phys((volatile const void*)fep->ctrl_ved_l);
+#else
+	ret = dma_set_mask(&pdev->dev, DMA_BIT_MASK(64));
+	printk(KERN_ERR"dma set mask %d\n", ret);
+	if (!ret) {
+		dma_addr_t dma_handle = dma_map_single(&pdev->dev, (void*)fep->ctrl_ved_l,
+				LS_PCI_SMEM_SIZE, DMA_FROM_DEVICE);
+		fep->ctrl_ved_r->val[ADDRESS_OFFSET] = dma_handle;
+	}
+#endif
+	}
+	else {
+		goto err_bad_pci_resource;
+	}
+	ret = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_MSI);
+	if (0 > ret) {
+		printk(KERN_ERR"Error allocating interrupts vector\n");
 		goto err_pci_enable_msi;
 	}
-
 	netif_napi_add(ndev, &fep->napi, fpx_enet_rx_napi, NAPI_POLL_WEIGHT);
 	ret = register_netdev(ndev);
 	if (ret) {
@@ -399,15 +416,13 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	/* success */
 	pci_set_drvdata (pdev, ndev);
 	spin_lock_init(&fep->spinlock);
-	printk(KERN_ERR"Success %016llx\n", pdev->resource[0].start);
+	printk(KERN_ERR"Success\n");
 	return 0;
 err_register_netdev:
 	netif_napi_del(&fep->napi);
-	pci_disable_msi(pdev);
+	pci_free_irq_vectors(pdev);
 err_pci_enable_msi:
-	iounmap((void*)fep->ctrl_ved_l);
-	iounmap((void*)fep->received_data_l);
-	release_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
+	kfree((void*)fep->ctrl_ved_l);
 	pci_iounmap(pdev, fep->ctrl_ved_r);
 err_bad_pci_resource:
 	pci_release_regions(pdev);
@@ -425,11 +440,9 @@ static void fpx_remove(struct pci_dev *pdev)
 
 	printk(KERN_ERR"Remove fpx device.\n");
 	netif_napi_del(&fep->napi);
-	pci_disable_msi(pdev);
+	pci_free_irq_vectors(pdev);
 	unregister_netdev(ndev);
-	iounmap((void*)fep->ctrl_ved_l);
-	iounmap((void*)fep->received_data_l);
-	release_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
+	kfree((void*)fep->ctrl_ved_l);
 	pci_iounmap(pdev, fep->ctrl_ved_r);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
@@ -457,7 +470,6 @@ static struct pci_driver fpx_driver = {
 
 static int __init fpx_init(void)
 {
-	printk(KERN_ERR"rc fpx_init\n");
 	return pci_register_driver(&fpx_driver);
 }
 static void __exit fpx_exit(void)
