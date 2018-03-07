@@ -20,10 +20,8 @@
 
 #define S32_PCI_SMEM			0xfd000000
 
-#define S32_PCI_SMEM_SIZE		0x00400000	/* 4 MB */
-
-#define LS_PCI_SMEM				0x83A0000000ULL	/* Remote, LS */
-#define LS_PCI_SMEM_SIZE		0x00400000	/* 4 MB */
+#define S32_PCI_SMEM_SIZE		0x00100000	/* 1MB */
+#define LS_PCI_SMEM_SIZE		0x00100000	/* 1MB */
 #define S32V_REMOTE_PCI_BASE	0x72000000	/* Local, S32V */
 
 #define S32_PCI_MSI_SIZE		0x10000		/* 64 KB */
