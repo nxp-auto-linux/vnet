@@ -58,9 +58,7 @@ struct fpx_enet_private {
 	struct control_ved *ctrl_ved_r; /* control virtual ethernet device, remote */
 	struct net_device *netdev;
 	struct napi_struct napi;
-
 	spinlock_t spinlock;
-
 	struct sk_buff *sk_buff_queue_rx[SKBUF_Q_SIZE];
 	int rx_sk_buff_index;
 	u32 level;
@@ -70,6 +68,7 @@ struct fpx_enet_private {
 #endif
 	volatile void* received_data_l;
 	volatile void* received_data_r;
+	dma_addr_t dma_handle;
 };
 
 #endif /* FPX_H */

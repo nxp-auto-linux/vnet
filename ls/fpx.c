@@ -25,10 +25,7 @@
 #include <linux/pci.h>
 #include <asm/cacheflush.h>
 #include <linux/gpio.h>
-
-#if 0
 #include <linux/dma-mapping.h>
-#endif
 
 #include "fpx.h"
 
@@ -373,8 +370,9 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		ret = -ENODEV;
 		goto err_bad_pci_resource;
 	}
-	/* alloc memory */
-	fep->ctrl_ved_l = (struct control_ved*)kmalloc(LS_PCI_SMEM_SIZE, GFP_ATOMIC);
+
+	fep->ctrl_ved_l = (struct control_ved*)dma_alloc_coherent(&pdev->dev,
+			LS_PCI_SMEM_SIZE, &fep->dma_handle, GFP_DMA);
 	fep->received_data_l = (volatile u32*)(fep->ctrl_ved_l + 1);
 
 	/* remote device */
@@ -382,20 +380,8 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	fep->received_data_r = (volatile void*)(fep->ctrl_ved_r + 1);
 	pci_set_master (pdev);
 	if (fep->ctrl_ved_l) {
+		fep->ctrl_ved_r->val[ADDRESS_OFFSET] = fep->dma_handle;
 		fep->ctrl_ved_r->val[MAGIC_OFFSET] = MAGIC_VAL_RC;
-#if 1
-		/* send buffer address to EP */
-		fep->ctrl_ved_r->val[ADDRESS_OFFSET] = 
-			(u64)virt_to_phys((volatile const void*)fep->ctrl_ved_l);
-#else
-	ret = dma_set_mask(&pdev->dev, DMA_BIT_MASK(64));
-	printk(KERN_ERR"dma set mask %d\n", ret);
-	if (!ret) {
-		dma_addr_t dma_handle = dma_map_single(&pdev->dev, (void*)fep->ctrl_ved_l,
-				LS_PCI_SMEM_SIZE, DMA_FROM_DEVICE);
-		fep->ctrl_ved_r->val[ADDRESS_OFFSET] = dma_handle;
-	}
-#endif
 	}
 	else {
 		goto err_bad_pci_resource;
@@ -422,7 +408,7 @@ err_register_netdev:
 	netif_napi_del(&fep->napi);
 	pci_free_irq_vectors(pdev);
 err_pci_enable_msi:
-	kfree((void*)fep->ctrl_ved_l);
+	dma_free_coherent(&pdev->dev, LS_PCI_SMEM_SIZE, fep->ctrl_ved_l, fep->dma_handle);
 	pci_iounmap(pdev, fep->ctrl_ved_r);
 err_bad_pci_resource:
 	pci_release_regions(pdev);
@@ -442,7 +428,7 @@ static void fpx_remove(struct pci_dev *pdev)
 	netif_napi_del(&fep->napi);
 	pci_free_irq_vectors(pdev);
 	unregister_netdev(ndev);
-	kfree((void*)fep->ctrl_ved_l);
+	dma_free_coherent(&pdev->dev, LS_PCI_SMEM_SIZE, fep->ctrl_ved_l, fep->dma_handle);
 	pci_iounmap(pdev, fep->ctrl_ved_r);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
