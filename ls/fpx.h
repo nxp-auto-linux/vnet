@@ -30,8 +30,6 @@
 
 
 #define MAGIC_VAL_RC			0x12abdfcbed540312ULL
-#define MAGIC_OFFSET			4
-#define ADDRESS_OFFSET			5
 
 struct dma_desc {
 	unsigned int chan_ctrl;
@@ -47,7 +45,9 @@ struct control_ved
 {
 	volatile u64 current_write_index;
 	volatile u64 current_read_index;
-	volatile u64 val[6];
+	volatile u64 magic_val;
+	volatile u64 address_offset;
+	volatile u64 val[4];
 };
 
 #define OFFSET_TO_DATA		sizeof(struct control_ved)

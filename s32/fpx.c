@@ -119,9 +119,9 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 			fep->d_tx[1].chan_ctrl = 0x19; /* LIE + RIE */
 			fep->d_tx[1].size = sizeof(u64);
 			fep->d_tx[1].sar_low =
-				lower_32_bits(S32_PCI_SMEM + 2 * sizeof(u64));
+				lower_32_bits(S32_PCI_SMEM + 4 * sizeof(u64));
 			fep->d_tx[1].sar_high =
-				upper_32_bits(S32_PCI_SMEM + 2 * sizeof(u64));
+				upper_32_bits(S32_PCI_SMEM + 4 * sizeof(u64));
 
 			fep->d_tx[1].dar_low =
 				lower_32_bits(S32V_REMOTE_PCI_BASE);
@@ -306,7 +306,7 @@ fpx_enet_open(struct net_device *ndev)
 		/* MSI outbound area */
 		outbound.target_addr = readl(fep->pp->dbi_base + 0x54);
 
-		if (!outbound.target_addr || (fep->ctrl_ved_l->val[MAGIC_OFFSET] != MAGIC_VAL_RC)) {
+		if (!outbound.target_addr || (fep->ctrl_ved_l->magic_val != MAGIC_VAL_RC)) {
 			printk(KERN_ERR
 				"PCIe Root-Complex(RC) is not ready yet. Wait until Linux on the RC side enables the PCIe module.\n");
 			return -EINVAL;
@@ -324,7 +324,7 @@ fpx_enet_open(struct net_device *ndev)
 			(resource_size_t)S32_PCI_MSI_MEM, (unsigned long)S32_PCI_MSI_SIZE);
 
 		/* set outbound area  */
-		outbound.target_addr = fep->ctrl_ved_l->val[ADDRESS_OFFSET];
+		outbound.target_addr = fep->ctrl_ved_l->address_offset;
 		outbound.base_addr = S32V_REMOTE_PCI_BASE;
 		outbound.size = LS_PCI_SMEM_SIZE;
 		outbound.region = 0;

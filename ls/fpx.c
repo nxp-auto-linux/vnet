@@ -373,17 +373,18 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	fep->ctrl_ved_l = (struct control_ved*)dma_alloc_coherent(&pdev->dev,
 			LS_PCI_SMEM_SIZE, &fep->dma_handle, GFP_DMA);
-	fep->received_data_l = (volatile u32*)(fep->ctrl_ved_l + 1);
-
-	/* remote device */
-	fep->ctrl_ved_r = (struct control_ved*)pci_iomap(pdev, 0, io_len);
-	fep->received_data_r = (volatile void*)(fep->ctrl_ved_r + 1);
-	pci_set_master (pdev);
 	if (fep->ctrl_ved_l) {
-		fep->ctrl_ved_r->val[ADDRESS_OFFSET] = fep->dma_handle;
-		fep->ctrl_ved_r->val[MAGIC_OFFSET] = MAGIC_VAL_RC;
+		fep->received_data_l = (volatile u32*)(fep->ctrl_ved_l + 1);
+
+		/* remote device */
+		fep->ctrl_ved_r = (struct control_ved*)pci_iomap(pdev, 0, io_len);
+		fep->received_data_r = (volatile void*)(fep->ctrl_ved_r + 1);
+		pci_set_master (pdev);
+		fep->ctrl_ved_r->address_offset = fep->dma_handle;
+		fep->ctrl_ved_r->magic_val = MAGIC_VAL_RC;
 	}
 	else {
+		printk(KERN_ERR"Dma allocation failed\n");
 		goto err_bad_pci_resource;
 	}
 	ret = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_MSI);
