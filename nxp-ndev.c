@@ -185,12 +185,8 @@ static int veth_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	/* head-room needed by PCI dev to insert in-band data length */
 	ndev->needed_headroom = NXP_PCI_MSG_HEADROOM;
 
-	ndev->dev_addr[0] = 0x88;
-	ndev->dev_addr[1] = 0x01;
-	ndev->dev_addr[2] = 0x02;
-	ndev->dev_addr[3] = 0x03;
-	ndev->dev_addr[4] = 0x04;
-	ndev->dev_addr[5] = 0x66;
+	/* generate a random MAC address */
+	eth_hw_addr_random(ndev);
 
 	SET_NETDEV_DEV(ndev, &pdev->dev);
 
