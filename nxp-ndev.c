@@ -31,14 +31,18 @@ static netdev_tx_t veth_start_tx(struct sk_buff *skb, struct net_device *ndev)
 
 	err = nxp_pdev_write(priv->pci_dev, skb->data, skb->len, skb);
 	if (err) {
+		if (err == -ENOBUFS) {
+			return NETDEV_TX_BUSY;
+		}
+
 		ndev->stats.tx_dropped++;
 		ndev->stats.tx_errors++;
-		goto err_out;
+		goto err_free_skb;
 	}
 
 	return NETDEV_TX_OK;
 
-err_out:
+err_free_skb:
 	dev_kfree_skb(skb);
 
 	return NETDEV_TX_OK;
