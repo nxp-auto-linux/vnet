@@ -24,8 +24,3 @@ config NXP_VETH_LS1043_S32GFPGA
 endchoice
 
 endif # NXP_VETH
-
-#config NXP_VTTY
-#	tristate "NXP Virtual TTY driver support"
-#	help
-#	Enable or disable virtual TTY driver support. To compile this driver as a module, choose 'M'.

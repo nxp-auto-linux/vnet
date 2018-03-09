@@ -17,7 +17,7 @@
 /* TODO: read local shared mem addr from dts */
 #define LS_PCI_SMEM		0x83A0000000ULL
 #define LS_PCI_SMEM_SIZE	0x00100000	/* 1 MB same as endpoint */
-#define SMEM_RES_NAME		"nxp-ls2084-shm"
+#define SMEM_RES_NAME		"nxp-pci-vdev local shm"
 
 #define BAR_NUM 0
 
@@ -29,8 +29,8 @@
 /**
  * struct nxp_pfm_priv - platform specific functionalities
  *
- * @qdma_regs:		QDMA configuration registers pointer
- * @gpio_value:		GPIO pin value: 0/1
+ * @qdma_regs:	QDMA configuration registers pointer
+ * @gpio_value:	GPIO pin value: 0/1
  */
 struct nxp_pfm_priv {
 	/* TODO: create memory mapped structure for QDMA regs */
@@ -39,6 +39,14 @@ struct nxp_pfm_priv {
 	int gpio_value;
 };
 
+/**
+ * nxp_pfm_init - initialize platform resources
+ * @platform: platform object
+ *
+ * Create platform object and initialize platform specific IPs: DMA, GPIO, etc.
+ *
+ * Return: 0 on success, error code otherwise
+ */
 int nxp_pfm_init(void **platform)
 {
 	struct nxp_pfm_priv *priv;
@@ -84,6 +92,10 @@ err_qdma_unmap:
 	return err;
 }
 
+/**
+ * nxp_pfm_free - release platform resources
+ * @platform: platform object
+ */
 void nxp_pfm_free(void *platform)
 {
 	struct nxp_pfm_priv *priv;
@@ -101,21 +113,41 @@ void nxp_pfm_free(void *platform)
 	kfree(priv);
 }
 
-void __iomem *nxp_pfm_alloc_local_shm(void *dev)
+/**
+ * nxp_pfm_alloc_local_shm - alloc local shared memory
+ * @platform:	platform object
+ * @pdev:	pci device
+ *
+ * Return: local shared IO memory address
+ */
+void __iomem *nxp_pfm_alloc_local_shm(void *platform, struct pci_dev *pdev)
 {
 	request_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE, SMEM_RES_NAME);
 	return ioremap_cache(LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
 }
 
-void nxp_pfm_free_local_shm(void *dev, void __iomem *addr)
+/**
+ * nxp_pfm_free_local_shm - release local shared memory
+ * @platform:	platform object
+ * @pdev:	pci device
+ * @addr:	IO memory address to release
+ */
+void nxp_pfm_free_local_shm(void *platform, struct pci_dev *pdev,
+			    void __iomem *addr)
 {
 	iounmap(addr);
 	release_mem_region(LS_PCI_SMEM, LS_PCI_SMEM_SIZE);
 }
 
-void __iomem *nxp_pfm_alloc_remote_shm(void *dev)
+/**
+ * nxp_pfm_alloc_remote_shm - alloc remote shared memory
+ * @platform:	platform object
+ * @pdev:	pci device
+ *
+ * Return: local shared IO memory address
+ */
+void __iomem *nxp_pfm_alloc_remote_shm(void *platform, struct pci_dev *pdev)
 {
-	struct pci_dev *pdev = (struct pci_dev *)dev;
 	u32 io_len;
 
 	/* read bar 0 length and flags */
@@ -130,16 +162,21 @@ void __iomem *nxp_pfm_alloc_remote_shm(void *dev)
 	return pci_iomap(pdev, BAR_NUM, io_len);
 }
 
-void nxp_pfm_free_remote_shm(void *dev, void __iomem *addr)
+/**
+ * nxp_pfm_free_remote_shm - release remote shared memory
+ * @platform:	platform object
+ * @pdev:	pci device
+ * @addr:	IO memory address to release
+ */
+void nxp_pfm_free_remote_shm(void *platform, struct pci_dev *pdev,
+			     void __iomem *addr)
 {
-	struct pci_dev *pdev = (struct pci_dev *)dev;
-
 	pci_iounmap(pdev, addr);
 }
 
 /**
  * nxp_pdev_write_msg - write message to remote
- * @pfm:	platform object
+ * @platform:	platform object
  * @src_addr:	source virtual address
  * @dest_addr:	destination physical address
  * @size:	destination physical address
@@ -148,8 +185,8 @@ void nxp_pfm_free_remote_shm(void *dev, void __iomem *addr)
  *
  * NOTE: src_addr and dest_addr must be 4 bytes aligned for QDMA.
  */
-int nxp_pfm_dma_write(void *platform, void *src_addr, phys_addr_t dest_addr,
-			u32 size)
+int nxp_pfm_dma_write(void *platform, const void *src_addr,
+			phys_addr_t dest_addr, u32 size)
 {
 	struct nxp_pfm_priv *priv;
 	u32 status = 0;
@@ -191,7 +228,12 @@ int nxp_pfm_dma_write(void *platform, void *src_addr, phys_addr_t dest_addr,
 	return 0;
 }
 
-/* Send data available notification to remote peer */
+/**
+ * nxp_pfm_trigger_remote_irq - Send data available notification to remote peer
+ * @platform: platform object
+ *
+ * Return: local shared memory address
+ */
 int nxp_pfm_trigger_remote_irq(void *platform)
 {
 	struct nxp_pfm_priv *priv;

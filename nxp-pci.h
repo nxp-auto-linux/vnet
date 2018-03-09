@@ -21,13 +21,13 @@
 /**
  * struct nxp_pdev_upper_ops - pci upper dev operations
  *
- * @dev:	upper device pointer/cookie
- * @rx_irq_cb:	receive notification callback
- * @tx_done_cb:	transmit completed notification callback
+ * @dev:	  upper device pointer/cookie
+ * @rx_notify_cb: receive notification callback called from rx interrupt
+ * @tx_done_cb:	  transmit completed notification callback
  */
 struct nxp_pdev_upper_ops {
 	void *dev;
-	void (*rx_irq_cb)(void *dev);
+	void (*rx_notify_cb)(void *dev);
 	void (*tx_done_cb)(void *dev, void *arg);
 };
 

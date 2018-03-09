@@ -9,12 +9,15 @@
 #include <linux/pci.h>
 #include "nxp-pci.h"
 
-#define DRIVER_NAME "nxp-veth"
-#define DEVICE_NAME "fpx"
+#define DRIVER_NAME	"nxp-veth"
+#define DRIVER_VERSION	"0.1"
+#define DEVICE_NAME	"fpx"
 
 MODULE_AUTHOR("NXP");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("platform:"DRIVER_NAME);
+MODULE_ALIAS(DRIVER_NAME);
+MODULE_DESCRIPTION("NXP Virtual Ethernet over PCIe Driver");
+MODULE_VERSION(DRIVER_VERSION);
 
 struct veth_ndev_priv {
 	struct pci_dev *pci_dev;
@@ -24,18 +27,14 @@ struct veth_ndev_priv {
 static netdev_tx_t veth_start_tx(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct veth_ndev_priv *priv = netdev_priv(ndev);
-	/* save skb len for updating stats as skb might be release by then */
-	u32 skb_len = skb->len;
 	int err;
 
 	err = nxp_pdev_write(priv->pci_dev, skb->data, skb->len, skb);
 	if (err) {
 		ndev->stats.tx_dropped++;
+		ndev->stats.tx_errors++;
 		goto err_out;
 	}
-
-	ndev->stats.tx_packets++;
-	ndev->stats.tx_bytes += skb_len;
 
 	return NETDEV_TX_OK;
 
@@ -47,7 +46,11 @@ err_out:
 
 static void veth_tx_done(void *dev, void *arg)
 {
+	struct net_device *ndev = (struct net_device *)dev;
 	struct sk_buff *skb = (struct sk_buff *)arg;
+
+	ndev->stats.tx_packets++;
+	ndev->stats.tx_bytes += skb->len;
 
 	dev_kfree_skb_any(skb);
 }
@@ -65,15 +68,18 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 	do {
 		err = nxp_pdev_read(priv->pci_dev, &buf, &size);
 		if (err) {
-			if (err != -ENODATA)
+			if (err != -ENODATA) {
 				ndev->stats.rx_errors++;
+				ndev->stats.rx_dropped++;
+			}
 			continue;
 		}
 
 		skb = napi_alloc_skb(napi, size);
 		if (unlikely(!skb)) {
 			ndev->stats.rx_dropped++;
-			continue;
+			/* net-stack out of memory - no point to continue */
+			break;
 		}
 
 		/* TODO: check perf impr: reserve NET_IP_ALIGN
@@ -93,7 +99,7 @@ static int veth_rx_napi(struct napi_struct *napi, int budget)
 		ndev->stats.rx_packets++;
 		ndev->stats.rx_bytes += size;
 
-		netif_receive_skb(skb);
+		err = netif_receive_skb(skb);
 
 		/* TODO: check perf impr: replace netif_receive_skb with: */
 		//napi_gro_receive(napi, skb);
@@ -155,7 +161,7 @@ static const struct net_device_ops netdev_ops = {
 };
 
 static struct nxp_pdev_upper_ops pci_ops = {
-	.rx_irq_cb = veth_rx_irq,
+	.rx_notify_cb = veth_rx_irq,
 	.tx_done_cb = veth_tx_done,
 };
 
@@ -227,14 +233,14 @@ static void veth_remove(struct pci_dev *pdev)
 		return;
 	}
 
-	netdev_info(ndev, "interface removed successfully\n");
-
 	unregister_netdev(ndev);
 	netif_napi_del(&priv->napi);
 
 	nxp_pdev_free(pdev);
 
 	free_netdev(ndev);
+
+	netdev_info(ndev, "interface removed successfully\n");
 }
 
 static struct pci_driver veth_driver = {
@@ -245,13 +251,13 @@ static struct pci_driver veth_driver = {
 
 static int __init veth_init(void)
 {
-	pr_info("driver init - v0.30\n");
+	pr_info("%s v%s driver init\n", DRIVER_NAME, DRIVER_VERSION);
 	return nxp_pci_register_driver(&veth_driver);
 }
 
 static void __exit veth_exit(void)
 {
-	pr_info("driver exit\n");
+	pr_info("%s exit\n", DRIVER_NAME);
 	nxp_pci_unregister_driver(&veth_driver);
 }
 

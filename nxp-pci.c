@@ -32,7 +32,7 @@ struct nxp_pci_shm {
 	volatile u64 read_index;
 	volatile u64 pad[6];
 	volatile u8 *data_buf;
-}__packed;
+};
 
 /**
  * struct nxp_pdev_priv - NXP generic PCI device
@@ -57,13 +57,19 @@ struct nxp_pdev_priv {
 	void *platform;
 };
 
+/**
+ * PCI device id array passed to pci_register_driver().
+ * Add pci device ids here when adding support for new platform.
+ */
 static const struct pci_device_id pdev_ids[] = {
 	{
-		PCI_DEVICE(0x1957, 0x4001)
+		PCI_DEVICE(PCI_VENDOR_ID_FREESCALE, 0x4000)
+	},
+	{
+		PCI_DEVICE(PCI_VENDOR_ID_FREESCALE, 0x4001)
 	},
 	{0, }
 };
-
 MODULE_DEVICE_TABLE(pci, pdev_ids);
 
 /**
@@ -71,8 +77,7 @@ MODULE_DEVICE_TABLE(pci, pdev_ids);
  * @drv: the pci driver structure to register. Only probe and remove fields
  * 	 must be initialized.
  *
- * This is a wrapper over pci_register_driver() function and its purpose is to
- * hide the pci specifics (i.e. pci device id table) from the upper driver.
+ * Hide pci specifics (i.e. pci device id table) from the upper driver.
  */
 int nxp_pci_register_driver(struct pci_driver *drv)
 {
@@ -85,8 +90,6 @@ int nxp_pci_register_driver(struct pci_driver *drv)
 /**
  * nxp_pci_unregister_driver - unregister a pci driver
  * @drv: the driver structure to unregister
- *
- * This is a wrapper over pci_unregister_driver().
  */
 void nxp_pci_unregister_driver(struct pci_driver *drv)
 {
@@ -100,7 +103,7 @@ static irqreturn_t nxp_pdev_rx_irq(int irq, void *dev_instance)
 	struct nxp_pdev_priv *priv = pci_get_drvdata(pdev);
 
 	if (priv->rx_irq_enable)
-		priv->upper_ops->rx_irq_cb(priv->upper_ops->dev);
+		priv->upper_ops->rx_notify_cb(priv->upper_ops->dev);
 
 	return IRQ_HANDLED;
 }
@@ -119,12 +122,12 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 	int err;
 
 	if (!pdev || !upper_ops
-		|| !upper_ops->rx_irq_cb || !upper_ops->tx_done_cb)
+		|| !upper_ops->rx_notify_cb || !upper_ops->tx_done_cb)
 		return -EINVAL;
 
 	dev = &pdev->dev;
-	dev_dbg(dev, "Init PCI dev: vendor = %04x, dev = %04x\n", pdev->vendor,
-		pdev->device);
+	dev_dbg(dev, "Init PCI dev: vendor = %#06x, dev = %#06x\n",
+		pdev->vendor, pdev->device);
 
 	/* alloc private data struct */
 	priv = kzalloc(sizeof(struct nxp_pdev_priv), GFP_KERNEL);
@@ -153,7 +156,8 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 	}
 
 	/* alloc local shared memory (platform dependent: PCI or DDR) */
-	priv->local_shm = (struct nxp_pci_shm *)nxp_pfm_alloc_local_shm(pdev);
+	priv->local_shm = (struct nxp_pci_shm *)nxp_pfm_alloc_local_shm(
+							priv->platform, pdev);
 	if (!priv->local_shm) {
 		err = -ENOMEM;
 		goto err_pci_release_regions;
@@ -162,7 +166,8 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 	priv->local_shm->write_index = 0;
 
 	/* alloc remote shared memory (platform dependent: PCI or DDR) */
-	priv->remote_shm = (struct nxp_pci_shm *)nxp_pfm_alloc_remote_shm(pdev);
+	priv->remote_shm = (struct nxp_pci_shm *)nxp_pfm_alloc_remote_shm(
+							priv->platform, pdev);
 	if (!priv->remote_shm) {
 		err = -ENOMEM;
 		goto err_free_local_shm;
@@ -195,9 +200,9 @@ int nxp_pdev_init(struct pci_dev *pdev, struct nxp_pdev_upper_ops *upper_ops)
 err_pci_disable_msi:
 	pci_disable_msi(pdev);
 err_free_remote_shm:
-	nxp_pfm_free_remote_shm(pdev, priv->remote_shm);
+	nxp_pfm_free_remote_shm(priv->platform, pdev, priv->remote_shm);
 err_free_local_shm:
-	nxp_pfm_free_local_shm(pdev, priv->local_shm);
+	nxp_pfm_free_local_shm(priv->platform, pdev, priv->local_shm);
 err_pci_release_regions:
 	pci_release_regions(pdev);
 err_disable_pci:
@@ -220,8 +225,8 @@ void nxp_pdev_free(struct pci_dev *pdev)
 
 	free_irq(pdev->irq, pdev);
 	pci_disable_msi(pdev);
-	nxp_pfm_free_remote_shm(pdev, priv->remote_shm);
-	nxp_pfm_free_local_shm(pdev, priv->local_shm);
+	nxp_pfm_free_remote_shm(priv->platform, pdev, priv->remote_shm);
+	nxp_pfm_free_local_shm(priv->platform, pdev, priv->local_shm);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
 	nxp_pfm_free(priv->platform);
