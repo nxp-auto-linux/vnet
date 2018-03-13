@@ -5,8 +5,15 @@
  */
 #include <linux/kernel.h>
 #include <linux/pci.h>
+
 #include "platform.h"
 #include "s32gfpga-mscm.h"
+
+/* pci-vdev platform specific interrupt configuration */
+#define PCIE_TX_CPU_TARGET    (0x1u) /* M7 core 0 */
+#define PCIE_RX_CPU_TARGET    (0x8u) /* Root Complex */
+#define PCIE_MSCM_IRQ_ID      (1u) /* Interrupt NVIC ID */
+#define PCIE_MSCM_MSI_ID      (0u) /* Interrupt MSI ID */
 
 /* pci-vdev platform specific shared memory configuration */
 #define PCIE_LSHM_OFFSET    (0x10000ul) /* Local Shared Memory Offset */
@@ -107,6 +114,21 @@ int nxp_pfm_dma_write(void *platform, const void *src_addr,
 
 int nxp_pfm_trigger_remote_irq(void *platform)
 {
-	/* platform support not implemented*/
-	return -EOPNOTSUPP;
+	struct nxp_pfm_priv *priv;
+	volatile struct mscm_memmap *MSCM;
+	
+	if (unlikely(!platform))
+		return -EINVAL;
+	
+	priv = (struct nxp_pfm_priv *)platform;
+	
+	MSCM = (volatile struct mscm_memmap *)(priv->s32gfpga_base + MSCM_BASE);
+	
+	/* generate MSCM core-to-core interrupt */
+	iowrite32(MSCM_IRCPGIR_TLF(0u) /* use CPUTL */
+	          | MSCM_IRCPGIR_CPUTL(PCIE_TX_CPU_TARGET)
+	          | MSCM_IRCPGIR_INTID(PCIE_MSCM_IRQ_ID),
+	          &MSCM->IRCPGIR);
+	
+	return 0;
 }
