@@ -68,6 +68,9 @@ static const struct pci_device_id pdev_ids[] = {
 	{
 		PCI_DEVICE(PCI_VENDOR_ID_FREESCALE, 0x4001)
 	},
+	{
+		PCI_DEVICE(PCI_VENDOR_ID_XILINX, 0x7021)
+	},
 	{0, }
 };
 MODULE_DEVICE_TABLE(pci, pdev_ids);
