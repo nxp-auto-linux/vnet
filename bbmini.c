@@ -196,7 +196,9 @@ int nxp_pfm_dma_write(void *platform, const void *src_addr,
 
 	priv = (struct nxp_pfm_priv *)platform;
 
-	__dma_flush_range(src_addr, src_addr + size);
+	/* TODO: investigate the posibility to use public DMA sync API:
+	 * dma_sync_single_for_cpu()/dma_sync_single_for_device() */
+	__dma_flush_area(src_addr, size);
 
 	*priv->qdma_regs &= ~1;
 
