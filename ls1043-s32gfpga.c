@@ -29,14 +29,22 @@
 /**
  * struct nxp_pfm_priv - platform specific functionalities
  *
- * @s32gfpga_base:      pointer to PCIe-mapped S32G-FPGA address space
- * @pci_res_start:      physical start address of PCIe resource
+ * @s32gfpga_base:  pointer to PCIe-mapped S32G-FPGA address space
+ * @pci_res_start:  physical start address of PCIe resource
  */
 struct nxp_pfm_priv {
 	volatile u8* s32gfpga_base;
 	volatile u64 pci_res_start;
 };
 
+/**
+ * nxp_pfm_init - initialize platform resources
+ * @platform:       platform object
+ *
+ * Create platform object and initialize it 
+ *
+ * Return: 0 on success, error code otherwise
+ */
 int nxp_pfm_init(void **platform)
 {
 	struct nxp_pfm_priv *priv;
@@ -53,6 +61,10 @@ int nxp_pfm_init(void **platform)
 	return 0;
 }
 
+/**
+ * nxp_pfm_free - release platform resources
+ * @platform:       platform object
+ */
 void nxp_pfm_free(void *platform)
 {
 	struct nxp_pfm_priv *priv;
@@ -65,6 +77,15 @@ void nxp_pfm_free(void *platform)
 	kfree(priv);
 }
 
+/**
+ * nxp_pfm_alloc_local_shm - assign local shared memory region
+ * @platform:       platform object
+ * @pdev:           pci device
+ *
+ * Return: virtual address of pci-mapped local memory region
+ *
+ * NOTE: Both local and remote memory regions are located in the device SRAM.
+ */
 void __iomem *nxp_pfm_alloc_local_shm(void *platform, struct pci_dev *pdev)
 {
 	struct nxp_pfm_priv *priv;
@@ -89,6 +110,12 @@ void __iomem *nxp_pfm_alloc_local_shm(void *platform, struct pci_dev *pdev)
 	return (void *)(priv->s32gfpga_base + IRAM_BASE + PCIE_LSHM_OFFSET);
 }
 
+/**
+ * nxp_pfm_free_local_shm - release local shared memory
+ * @platform:       platform object
+ * @pdev:           pci device
+ * @addr:           not used
+ */
 void nxp_pfm_free_local_shm(void *platform, struct pci_dev *pdev,
 			    void __iomem *addr)
 {
@@ -99,6 +126,15 @@ void nxp_pfm_free_local_shm(void *platform, struct pci_dev *pdev,
 	pci_iounmap(pdev, (void *)priv->s32gfpga_base);
 }
 
+/**
+ * nxp_pfm_alloc_remote_shm - assign remote shared memory region
+ * @platform:       platform object
+ * @pdev:           pci device
+ *
+ * Return: virtual address of pci-mapped remote memory region
+ *
+ * NOTE: Both local and remote memory regions are located in the device SRAM.
+ */
 void __iomem *nxp_pfm_alloc_remote_shm(void *platform, struct pci_dev *pdev)
 {
 	struct nxp_pfm_priv *priv;
@@ -108,12 +144,29 @@ void __iomem *nxp_pfm_alloc_remote_shm(void *platform, struct pci_dev *pdev)
 	return (void *)(priv->s32gfpga_base + IRAM_BASE + PCIE_RSHM_OFFSET);
 }
 
+/**
+ * nxp_pfm_free_remote_shm - release remote shared memory
+ * @platform:       platform object
+ * @pdev:           pci device
+ * @addr:           not used
+ */
 void nxp_pfm_free_remote_shm(void *platform, struct pci_dev *pdev,
 			     void __iomem *addr)
 {
 	return; /* already done in nxp_pfm_free_local_shm() */
 }
 
+/**
+ * nxp_pfm_dma_write - write message to remote device
+ * @platform:       platform object
+ * @src_addr:       source virtual address
+ * @dest_addr:      destination physical address
+ * @size:           destination physical address
+ *
+ * Return: 0 on success, error code otherwise
+ *
+ * NOTE: performs a memcpy(), as DMA is not supported for this platform
+ */
 int nxp_pfm_dma_write(void *platform, const void *src_addr,
 			phys_addr_t dest_addr, u32 size)
 {
@@ -130,6 +183,14 @@ int nxp_pfm_dma_write(void *platform, const void *src_addr,
 	return 0;
 }
 
+/**
+ * nxp_pfm_trigger_remote_irq - notify remote device that data is available
+ * @platform: platform object
+ *
+ * Return: 0 on success, error code otherwise
+ *
+ * NOTE: a MSCM inter-core interrupt is used to notify remote device
+ */
 int nxp_pfm_trigger_remote_irq(void *platform)
 {
 	struct nxp_pfm_priv *priv;

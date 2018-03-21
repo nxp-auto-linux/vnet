@@ -62,9 +62,9 @@ struct mscm_memmap {
 };
 
 /* MSCM Hardware Register Bit Fields Definition */
-#define MSCM_IRCPGIR_TLF_MASK       (0x03000000ul) /* Target List Field */
-#define MSCM_IRCPGIR_CPUTL_MASK     (0x000F0000ul) /* CPU Target List */
-#define MSCM_IRCPGIR_INTID_MASK     (0x00000003ul) /* Interrupt ID */
+#define MSCM_IRCPGIR_TLF_MASK       0x03000000ul /* Target List Field */
+#define MSCM_IRCPGIR_CPUTL_MASK     0x000F0000ul /* CPU Target List */
+#define MSCM_IRCPGIR_INTID_MASK     0x00000003ul /* Interrupt ID */
 
 #define MSCM_IRCPGIR_TLF(n)       ((n << 24u) & MSCM_IRCPGIR_TLF_MASK)
 #define MSCM_IRCPGIR_CPUTL(n)     ((n << 16u) & MSCM_IRCPGIR_CPUTL_MASK)
