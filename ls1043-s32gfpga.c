@@ -67,14 +67,10 @@ int nxp_pfm_init(void **platform)
  */
 void nxp_pfm_free(void *platform)
 {
-	struct nxp_pfm_priv *priv;
-
 	if (unlikely(!platform))
 		return;
 
-	priv = (struct nxp_pfm_priv *)platform;
-
-	kfree(priv);
+	kfree(platform);
 }
 
 /**
@@ -84,7 +80,7 @@ void nxp_pfm_free(void *platform)
  *
  * Return: virtual address of pci-mapped local memory region
  *
- * NOTE: Both local and remote memory regions are located in the device SRAM.
+ * NOTE: both local and remote memory regions are located in the device SRAM.
  */
 void __iomem *nxp_pfm_alloc_local_shm(void *platform, struct pci_dev *pdev)
 {
@@ -97,7 +93,7 @@ void __iomem *nxp_pfm_alloc_local_shm(void *platform, struct pci_dev *pdev)
 			pci_resource_flags(pdev, BAR_NUM));
 
 	if (!(pci_resource_flags(pdev, BAR_NUM) & IORESOURCE_MEM_64)) {
-		pr_err("Bad PCI resource\n");
+		dev_err((void *)pdev, "Bad PCI resource\n");
 		return NULL;
 	}
 
@@ -114,16 +110,14 @@ void __iomem *nxp_pfm_alloc_local_shm(void *platform, struct pci_dev *pdev)
  * nxp_pfm_free_local_shm - release local shared memory
  * @platform:       platform object
  * @pdev:           pci device
- * @addr:           not used
+ * @addr:           region base address
+ *
+ * NOTE: resets all data in the local shared memory region to zero.
  */
 void nxp_pfm_free_local_shm(void *platform, struct pci_dev *pdev,
 			    void __iomem *addr)
 {
-	struct nxp_pfm_priv *priv;
-	
-	priv = (struct nxp_pfm_priv *)platform;
-	
-	pci_iounmap(pdev, (void *)priv->s32gfpga_base);
+	memset(addr, 0, (PCIE_LSHM_OFFSET - PCIE_RSHM_OFFSET));
 }
 
 /**
@@ -133,7 +127,7 @@ void nxp_pfm_free_local_shm(void *platform, struct pci_dev *pdev,
  *
  * Return: virtual address of pci-mapped remote memory region
  *
- * NOTE: Both local and remote memory regions are located in the device SRAM.
+ * NOTE: both local and remote memory regions are located in the device SRAM.
  */
 void __iomem *nxp_pfm_alloc_remote_shm(void *platform, struct pci_dev *pdev)
 {
@@ -148,12 +142,20 @@ void __iomem *nxp_pfm_alloc_remote_shm(void *platform, struct pci_dev *pdev)
  * nxp_pfm_free_remote_shm - release remote shared memory
  * @platform:       platform object
  * @pdev:           pci device
- * @addr:           not used
+ * @addr:           region base address
+ *
+ * NOTE: resets all data in the remote shared memory region to zero.
  */
 void nxp_pfm_free_remote_shm(void *platform, struct pci_dev *pdev,
 			     void __iomem *addr)
 {
-	return; /* already done in nxp_pfm_free_local_shm() */
+	struct nxp_pfm_priv *priv;
+
+	memset(addr, 0, (PCIE_LSHM_OFFSET - PCIE_RSHM_OFFSET));
+	
+	priv = (struct nxp_pfm_priv *)platform;
+	
+	pci_iounmap(pdev, (void *)priv->s32gfpga_base);
 }
 
 /**
@@ -207,7 +209,7 @@ int nxp_pfm_trigger_remote_irq(void *platform)
 	iowrite32(MSCM_IRCPGIR_TLF(0u) /* use CPUTL */
 	          | MSCM_IRCPGIR_CPUTL(PCIE_TX_CPU_TARGET)
 	          | MSCM_IRCPGIR_INTID(PCIE_MSCM_IRQ_ID),
-	          &mscm->IRCPGIR);
+	          &mscm->ircpgir);
 	
 	return 0;
 }
