@@ -118,9 +118,9 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 			fep->d_tx[1].chan_ctrl = 0x19; /* LIE + RIE */
 			fep->d_tx[1].size = sizeof(u64);
 			fep->d_tx[1].sar_low =
-				lower_32_bits(S32_PCI_SMEM + 2 * sizeof(u64));
+				lower_32_bits(S32_PCI_SMEM + 4 * sizeof(u64));
 			fep->d_tx[1].sar_high =
-				upper_32_bits(S32_PCI_SMEM + 2 * sizeof(u64));
+				upper_32_bits(S32_PCI_SMEM + 4 * sizeof(u64));
 
 			fep->d_tx[1].dar_low =
 				lower_32_bits(S32V_REMOTE_PCI_BASE);
@@ -291,7 +291,7 @@ fpx_enet_open(struct net_device *ndev)
 		/* MSI outbound area */
 		outbound.target_addr = readl(fep->pp->dbi_base + 0x54);
 
-		if (!outbound.target_addr) {
+		if (!outbound.target_addr || (fep->ctrl_ved_l->magic_val != MAGIC_VAL_RC)) {
 			printk(KERN_ERR
 				"PCIe Root-Complex(RC) is not ready yet. Wait until Linux on the RC side enables the PCIe module.\n");
 			return -EINVAL;
@@ -307,6 +307,20 @@ fpx_enet_open(struct net_device *ndev)
 			"pcie-msi-buff");
 		fep->msi_zone = (volatile int *)ioremap_nocache(
 			(resource_size_t)S32_PCI_MSI_MEM, (unsigned long)S32_PCI_MSI_SIZE);
+
+		/* set outbound area  */
+		outbound.target_addr = fep->ctrl_ved_l->address_offset;
+		outbound.base_addr = S32V_REMOTE_PCI_BASE;
+		outbound.size = LS_PCI_SMEM_SIZE;
+		outbound.region = 0;
+		outbound.region_type = 0; /* memory */
+		s32v_pcie_setup_outbound(&outbound);
+		/* do ioremap nocache, Remote area, outbound */
+		fep->remote_res = request_mem_region(S32V_REMOTE_PCI_BASE, LS_PCI_SMEM_SIZE,
+                                    "pcie-remote-buff");
+		fep->ctrl_ved_r = (struct control_ved*)ioremap_nocache(
+			(resource_size_t)S32V_REMOTE_PCI_BASE, (unsigned long)LS_PCI_SMEM_SIZE);
+		fep->received_data_r = (volatile u32*)(fep->ctrl_ved_r + 1);
 
 		/* ENABLE MSI for DMA write */
 		writel(S32_PCI_MSI_MEM, fep->pp->dbi_base + 0x9d0);
@@ -437,7 +451,6 @@ static int __init fpx_init(void)
 	struct fpx_enet_private *fep = NULL;
 	struct net_device *ndev = NULL;
 	struct s32v_inbound_region inbound;
-	struct s32v_outbound_region outbound;
 
 	printk(KERN_ERR "installing new fep module v2\n");
 	ndev = alloc_netdev(sizeof(struct fpx_enet_private),
@@ -477,19 +490,6 @@ static int __init fpx_init(void)
 		(resource_size_t)S32_PCI_SMEM, (unsigned long)sizeof(struct control_ved));
 	fep->received_data_l = (volatile void*)ioremap_cache((resource_size_t)S32_PCI_SMEM + sizeof(struct control_ved), 
 		S32_PCI_SMEM_SIZE - sizeof(struct control_ved));
-	/* set outbound area  */
-	outbound.target_addr = LS_PCI_SMEM;
-	outbound.base_addr = S32V_REMOTE_PCI_BASE;
-	outbound.size = LS_PCI_SMEM_SIZE;
-	outbound.region = 0;
-	outbound.region_type = 0; /* memory */
-	s32v_pcie_setup_outbound(&outbound);
-	/* do ioremap nocache, Remote area, outbound */
-	fep->local_res = request_mem_region(S32V_REMOTE_PCI_BASE, LS_PCI_SMEM_SIZE,
-                                    "pcie-remote-buff");
-	fep->ctrl_ved_r = (struct control_ved*)ioremap_nocache(
-		(resource_size_t)S32V_REMOTE_PCI_BASE, (unsigned long)LS_PCI_SMEM_SIZE);
-	fep->received_data_r = (volatile u32*)(fep->ctrl_ved_r + 1);
 
 	ret = register_netdev(ndev);
 	if (ret) {

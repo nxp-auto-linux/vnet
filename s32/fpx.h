@@ -20,10 +20,8 @@
 
 #define S32_PCI_SMEM			0xfd000000
 
-#define S32_PCI_SMEM_SIZE		0x00400000	/* 4 MB */
-
-#define LS_PCI_SMEM				0x83A0000000ULL	/* Remote, LS */
-#define LS_PCI_SMEM_SIZE		0x00400000	/* 4 MB */
+#define S32_PCI_SMEM_SIZE		0x00100000	/* 1MB */
+#define LS_PCI_SMEM_SIZE		0x00100000	/* 1MB */
 #define S32V_REMOTE_PCI_BASE	0x72000000	/* Local, S32V */
 
 #define S32_PCI_MSI_SIZE		0x10000		/* 64 KB */
@@ -40,6 +38,9 @@
 #if MSI_WORKAROUND
 	#define S32V2LS_INT_PIN		27
 #endif
+
+#define MAGIC_VAL_RC            0x12abdfcbed540312ULL
+
 struct dma_desc {
 	unsigned int chan_ctrl;
 	unsigned int size;
@@ -54,7 +55,9 @@ struct control_ved
 {
 	volatile u64 current_write_index;
 	volatile u64 current_read_index;
-	volatile u64 val[6];
+	volatile u64 magic_val;
+	volatile u64 address_offset;
+	volatile u64 val[4];
 };
 
 #define OFFSET_TO_DATA		sizeof(struct control_ved)

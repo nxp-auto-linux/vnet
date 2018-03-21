@@ -14,16 +14,8 @@
 #define SKBUF_Q_SIZE        	(MAX_NO_BUFFERS)
 #define MAX_BUFFER_SIZE			(1536)
 
-#define S32_PCI_SMEM			0xfd000000
 
-#define S32_PCI_SMEM_SIZE		0x00400000	/* 4 MB */
-#define S32_PCI_MSI_MEM			(S32_PCI_SMEM + S32_PCI_SMEM_SIZE)
-#define S32_PCI_MSI_SIZE		0x1000		/* 4 KB */
-
-#define LS_PCI_SMEM				0x83A0000000ULL	/* Remote, LS */
-#define LS_PCI_SMEM_SIZE		0x00400000	/* 4 MB */
-#define S32V_REMOTE_PCI_BASE	0x72000000	/* Local, S32V */
-#define LS_REMOTE_PCI_BASE		0x0000003840000000	/* Local, LS */
+#define LS_PCI_SMEM_SIZE		0x00100000	/* 1MB */
 
 #define MSI_WORKAROUND			0
 
@@ -36,6 +28,8 @@
 	#define S32V2LS_INT_PIN		435
 #endif
 
+
+#define MAGIC_VAL_RC			0x12abdfcbed540312ULL
 
 struct dma_desc {
 	unsigned int chan_ctrl;
@@ -51,7 +45,9 @@ struct control_ved
 {
 	volatile u64 current_write_index;
 	volatile u64 current_read_index;
-	volatile u64 val[6];
+	volatile u64 magic_val;
+	volatile u64 address_offset;
+	volatile u64 val[4];
 };
 
 #define OFFSET_TO_DATA		sizeof(struct control_ved)
@@ -62,12 +58,7 @@ struct fpx_enet_private {
 	struct control_ved *ctrl_ved_r; /* control virtual ethernet device, remote */
 	struct net_device *netdev;
 	struct napi_struct napi;
-
 	spinlock_t spinlock;
-
-	struct resource *local_res;
-	struct resource *remote_res;
-
 	struct sk_buff *sk_buff_queue_rx[SKBUF_Q_SIZE];
 	int rx_sk_buff_index;
 	u32 level;
@@ -77,6 +68,7 @@ struct fpx_enet_private {
 #endif
 	volatile void* received_data_l;
 	volatile void* received_data_r;
+	dma_addr_t dma_handle;
 };
 
 #endif /* FPX_H */
