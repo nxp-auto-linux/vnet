@@ -111,13 +111,15 @@ void __iomem *nxp_pfm_alloc_local_shm(void *platform, struct pci_dev *pdev)
  * @platform:       platform object
  * @pdev:           pci device
  * @addr:           region base address
- *
- * NOTE: resets all data in the local shared memory region to zero.
  */
 void nxp_pfm_free_local_shm(void *platform, struct pci_dev *pdev,
 			    void __iomem *addr)
 {
-	memset(addr, 0, (PCIE_LSHM_OFFSET - PCIE_RSHM_OFFSET));
+	struct nxp_pfm_priv *priv;
+
+	priv = (struct nxp_pfm_priv *)platform;
+
+	pci_iounmap(pdev, (void *)priv->s32gfpga_base);
 }
 
 /**
@@ -143,19 +145,11 @@ void __iomem *nxp_pfm_alloc_remote_shm(void *platform, struct pci_dev *pdev)
  * @platform:       platform object
  * @pdev:           pci device
  * @addr:           region base address
- *
- * NOTE: resets all data in the remote shared memory region to zero.
  */
 void nxp_pfm_free_remote_shm(void *platform, struct pci_dev *pdev,
 			     void __iomem *addr)
 {
-	struct nxp_pfm_priv *priv;
-
-	memset(addr, 0, (PCIE_LSHM_OFFSET - PCIE_RSHM_OFFSET));
-	
-	priv = (struct nxp_pfm_priv *)platform;
-	
-	pci_iounmap(pdev, (void *)priv->s32gfpga_base);
+	/* done in nxp_pfm_free_local_shm() */
 }
 
 /**
