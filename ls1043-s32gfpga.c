@@ -16,8 +16,8 @@
 #define PCIE_MSCM_MSI_ID      0u /* Interrupt MSI ID */
 
 /* pci-vdev platform specific shared memory configuration */
-#define PCIE_LSHM_OFFSET    0x10000ul /* Local Shared Memory Offset */
-#define PCIE_RSHM_OFFSET    0x00000ul /* Remote Shared Memory Offset */
+#define PCIE_LSHM_OFFSET    0x100000ul /* Local Shared Memory Offset */
+#define PCIE_RSHM_OFFSET    0x000000ul /* Remote Shared Memory Offset */
 
 /* S32G-FPGA IP Block Base Addresses */
 #define IRAM_BASE     0x34000000ul /* Internal Static Random Access Memory */
