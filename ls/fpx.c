@@ -52,10 +52,10 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	}
 	else {
 		u32 status = 0;
-		void* start = (skb->data - sizeof(u16));
+		void* start = (skb->data - sizeof(u32));
 
-		*(u16*)(skb->data - sizeof(u16)) = (u16)skb->len;
-		__dma_flush_area(start, skb->len + sizeof(u16));
+		*(u32*)(skb->data - sizeof(u32)) = (u32)skb->len;
+		__dma_flush_area(start, skb->len + sizeof(u32));
 
 		*fep->qdma_regs &= ~1;
 		status = *(fep->qdma_regs + 1) & 0x92;
@@ -68,7 +68,7 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		*(fep->qdma_regs + 6) = (u32)(fep->pci_dev->resource[0].start >> 32);
 		*(fep->qdma_regs + 7) = (u32)(fep->pci_dev->resource[0].start) + 
 						OFFSET_TO_DATA + ((write_i & (MAX_NO_BUFFERS - 1)) * (MAX_BUFFER_SIZE));
-		*(fep->qdma_regs + 8) = skb->len + sizeof(u16);
+		*(fep->qdma_regs + 8) = (u32)skb->len + sizeof(u32);
 
 		while (1) {
 			*fep->qdma_regs = 1;
@@ -120,47 +120,58 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 		((read_i & (MAX_NO_BUFFERS - 1)) * MAX_BUFFER_SIZE);
 
 	while ((pkts < budget) && (write_i > read_i)) {
-		u16 buf_len;
+		unsigned int buf_len;
 		pkts ++;
 		/* get the buffer length and restore the data */
-		buf_len = *(u16*)tmp_data;
+		buf_len = *(unsigned int*)tmp_data;
 
-		if (buf_len < MAX_BUFFER_SIZE) {
+		if (MAX_BUFFER_SIZE > buf_len) {
 
-			sk_index = fep->rx_sk_buff_index;
-			if (SKBUF_Q_SIZE > sk_index) {
-				sk = fep->sk_buff_queue_rx[sk_index];
-				fep->sk_buff_queue_rx[sk_index] = NULL; /* debug */
-				fep->rx_sk_buff_index ++;
-			}
-			else { /* no more sk_buf */
-				for (sk_index = 0; sk_index < SKBUF_Q_SIZE; sk_index ++) {
-					sk = __netdev_alloc_skb_ip_align(ndev, MAX_BUFFER_SIZE, GFP_ATOMIC);
-					fep->sk_buff_queue_rx[sk_index] = sk;
-				}
-
-				sk = fep->sk_buff_queue_rx[0];
-				fep->sk_buff_queue_rx[0] = NULL; /* debug */
-				fep->rx_sk_buff_index = 1;
+		sk_index = fep->rx_sk_buff_index;
+		if (SKBUF_Q_SIZE > sk_index) {
+			sk = fep->sk_buff_queue_rx[sk_index];
+			fep->sk_buff_queue_rx[sk_index] = NULL; /* debug */
+			fep->rx_sk_buff_index ++;
+		}
+		else { /* no more sk_buf */
+			for (sk_index = 0; sk_index < SKBUF_Q_SIZE; sk_index ++) {
+				sk = __netdev_alloc_skb_ip_align(ndev, MAX_BUFFER_SIZE, GFP_ATOMIC);
+				fep->sk_buff_queue_rx[sk_index] = sk;
 			}
 
-			if (unlikely(!sk)) {
-				ndev->stats.rx_dropped++;
-			}
-			else {
-				unsigned char* tmp = NULL;
+			sk_index = 0;
+			sk = fep->sk_buff_queue_rx[0];
+			fep->sk_buff_queue_rx[0] = NULL; /* debug */
+			fep->rx_sk_buff_index = 1;
+		}
 
-				/* update RX stats */
-				ndev->stats.rx_packets++;
-				ndev->stats.rx_bytes += buf_len;
-				/* do memcpy */
-				tmp = skb_put(sk, buf_len);
+		if (unlikely(!sk)) {
+			ndev->stats.rx_dropped++;
+		}
+		else {
+			unsigned char* tmp = NULL;
 
-				memcpy((tmp), (const void *)tmp_data + sizeof(u16), buf_len);
-				sk->protocol = eth_type_trans(sk, ndev);
+			/* update RX stats */
+			ndev->stats.rx_packets++;
+			ndev->stats.rx_bytes += buf_len;
+			/* do memcpy */
+			tmp = skb_put(sk, buf_len);
+
+			/* only IPv4 support */
+			if ((*(((unsigned char*)tmp_data) + 4)) == 0x45) {
+				sk->protocol = htons(ETH_P_IP);
+				memcpy((tmp), (const void *)tmp_data + 4, buf_len);
 				sk->ip_summed = CHECKSUM_UNNECESSARY;
+
 				netif_receive_skb(sk);
 			}
+			else {
+				fep->sk_buff_queue_rx[sk_index] = sk;
+				ndev->stats.rx_errors ++;
+				fep->rx_sk_buff_index --;
+			}
+		}
+
 		}
 		else {
 			ndev->stats.rx_errors ++;
@@ -300,6 +311,15 @@ static const struct net_device_ops fpx_netdev_ops = {
 };
 
 
+static void
+fpx_setup(struct net_device *dev)
+{
+	dev->mtu		    = ETH_DATA_LEN;
+	dev->tx_queue_len	= SKBUF_Q_SIZE;
+	dev->flags		    |= IFF_POINTOPOINT | IFF_NOARP;
+	dev->netdev_ops		= &fpx_netdev_ops;
+}
+
 static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
 	struct net_device *ndev = NULL;
@@ -311,16 +331,11 @@ static int fpx_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 			pdev->device);
 
 	ndev = alloc_netdev(sizeof(struct fpx_enet_private),
-			"fpx%d", NET_NAME_ENUM, ether_setup);
+			"fpx%d", NET_NAME_ENUM, fpx_setup);
 	if (!ndev) {
 		printk(KERN_ERR"Error alloc_netdev, exit.\n");
 		return -ENOMEM;
 	}
-
-	ndev->flags = 0;
-	ndev->priv_flags &= ~IFF_TX_SKB_SHARING;
-	ndev->netdev_ops = &fpx_netdev_ops;
-	ndev->needed_headroom = sizeof(u16);
 
 	ndev->dev_addr[0] = 0x88;
 	ndev->dev_addr[1] = 0x01;
