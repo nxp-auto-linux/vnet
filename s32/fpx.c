@@ -24,10 +24,11 @@
 #include <linux/platform_device.h>
 #include <linux/gpio.h>
 
+#include <linux/version.h>
 #include <asm/cacheflush.h>
 
-#include <../drivers/pci/host/pcie-designware.h>
-extern struct pcie_port *s32v_get_pcie_port(void);
+#include <../drivers/pci/dwc/pcie-designware.h>
+extern struct dw_pcie *s32v_get_dw_pcie(void);
 extern void register_callback(void*);
 #include "fpx.h"
 #define DRIVER_NAME	"fpx"
@@ -35,14 +36,14 @@ extern void register_callback(void*);
 static struct net_device *s_ndev = NULL;
 
 struct s32v_inbound_region {
-        u32 bar_nr;
-        u32 target_addr;
-        u32 region;
+	u32 bar_nr;
+	u32 target_addr;
+	u32 region;
 };
 extern int s32v_pcie_setup_inbound(void *data);
 
 struct s32v_outbound_region {
-        u64 target_addr;
+	u64 target_addr;
 	u64 base_addr;
 	u32 size;
 	u32 region;
@@ -52,10 +53,23 @@ struct s32v_outbound_region {
 
 extern int s32v_pcie_setup_outbound(void *data);
 
-extern void __dma_flush_range(const void *, const void *);
-extern void __inval_cache_range(const void *, const void *);
+static void fpx_flush_range(const void *start, const void *end)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
+	__dma_flush_area(start, (size_t)((void*)end - (void*)start));
+#else
+	__dma_flush_range(start, end);
+#endif
+}
 
-
+inline void fpx_inval_range(const void *start, const void *end)
+{
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
+	__inval_dcache_area((void *)start, (size_t)((void*)end - (void*)start));
+#else
+	__inval_cache_range(start, end);
+#endif
+}
 
 static netdev_tx_t
 fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
@@ -109,7 +123,7 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 			*(int*)(start) = skb->len;
 
 			/* flush cache */
-			__dma_flush_range((const void*)start, (const void*)end);
+			fpx_flush_range((const void*)start, (const void*)end);
 
 			ndev->stats.tx_packets++;
 			ndev->stats.tx_bytes += skb->len;
@@ -140,9 +154,9 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 			start = (void*)&fep->d_tx[0];
 			end = (void*)&fep->d_tx[3];
 
-			__dma_flush_range((const void*)start, (const void*)end);
+			fpx_flush_range((const void*)start, (const void*)end);
 			fep->transmiter_status = STS_TX_INPROGRESS;
-			dw_start_dma_llw(fep->pp, virt_to_phys(fep->d_tx));
+			dw_start_dma_llw(&fep->pcie->pp, virt_to_phys(fep->d_tx));
 		}
 	}
 	else {
@@ -201,9 +215,9 @@ static int fpx_enet_rx_napi(struct napi_struct *napi, int budget)
 		unsigned int buf_len;
 		pkts ++;
 		/* get the buffer length and restore the data */
-		__inval_cache_range((const void*)tmp_data, (const void*)tmp_data + 4);
+		fpx_inval_range((const void*)tmp_data, (const void*)tmp_data + 4);
 		buf_len = *(unsigned int*)tmp_data;
-		__inval_cache_range((const void*)tmp_data + 4, (const void*)tmp_data + 4 + buf_len);
+		fpx_inval_range((const void*)tmp_data + 4, (const void*)tmp_data + 4 + buf_len);
 
 		if (MAX_BUFFER_SIZE > buf_len) {
 
@@ -294,9 +308,9 @@ fpx_enet_open(struct net_device *ndev)
 	int retval = 0;
 	struct fpx_enet_private *fep = netdev_priv(ndev);
 
-	fep->pp = s32v_get_pcie_port();
+	fep->pcie = s32v_get_dw_pcie();
 
-	if (!fep->pp) {
+	if (!fep->pcie) {
 		printk(KERN_ERR"fatal error, cannot access PCI driver\n");
 		retval = -EINVAL;
 	}
@@ -304,7 +318,7 @@ fpx_enet_open(struct net_device *ndev)
 		struct s32v_outbound_region outbound;
 
 		/* MSI outbound area */
-		outbound.target_addr = readl(fep->pp->dbi_base + 0x54);
+		outbound.target_addr = readl(fep->pcie->dbi_base + 0x54);
 
 		if (!outbound.target_addr || (fep->ctrl_ved_l->magic_val != MAGIC_VAL_RC)) {
 			printk(KERN_ERR
@@ -338,11 +352,11 @@ fpx_enet_open(struct net_device *ndev)
 		fep->received_data_r = (volatile u32*)(fep->ctrl_ved_r + 1);
 
 		/* ENABLE MSI for DMA write */
-		writel(S32_PCI_MSI_MEM, fep->pp->dbi_base + 0x9d0);
-		writel(0, fep->pp->dbi_base + 0x9d4);
-		writel(S32_PCI_MSI_MEM, fep->pp->dbi_base + 0x9d8);
-		writel(0, fep->pp->dbi_base + 0x9dc);
-		writel(0, fep->pp->dbi_base + 0x9e0);
+		writel(S32_PCI_MSI_MEM, fep->pcie->dbi_base + 0x9d0);
+		writel(0, fep->pcie->dbi_base + 0x9d4);
+		writel(S32_PCI_MSI_MEM, fep->pcie->dbi_base + 0x9d8);
+		writel(0, fep->pcie->dbi_base + 0x9dc);
+		writel(0, fep->pcie->dbi_base + 0x9e0);
 
 		fep->rx_sk_buff_index = 0;
 		fep->ctrl_ved_l->current_write_index = 0;
@@ -369,10 +383,7 @@ fpx_enet_open(struct net_device *ndev)
 		device_set_wakeup_enable(&ndev->dev, 0);
 
 		/* register callback */
-		fep->pp->call_back = fpx_irq_callback;
-		/* avoid pcie driver crash */
-		fep->pp->ops->send_signal_to_user = NULL;
-
+		fep->pcie->pp.call_back = fpx_irq_callback;
 		
 #if MSI_WORKAROUND
 		/* configure GPIO S32V2LS_INT_PIN to signal LS2, workaround MSI */
@@ -419,8 +430,8 @@ fpx_enet_close(struct net_device *ndev)
 	gpio_free(S32V2LS_INT_PIN);
 #endif
 	/* unregister callback */
-	fep->pp->call_back = NULL;
-	fep->pp = NULL;
+	fep->pcie->pp.call_back = NULL;
+	fep->pcie = NULL;
 
 	iounmap((void*)fep->msi_zone);
 	release_mem_region(S32_PCI_MSI_MEM, S32_PCI_MSI_SIZE);
