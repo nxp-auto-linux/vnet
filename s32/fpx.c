@@ -27,8 +27,14 @@
 #include <linux/version.h>
 #include <asm/cacheflush.h>
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 #include <../drivers/pci/dwc/pcie-designware.h>
 extern struct dw_pcie *s32v_get_dw_pcie(void);
+#else
+#include <../drivers/pci/host/pcie-designware.h>
+extern struct pcie_port *s32v_get_pcie_port(void);
+#endif
+
 extern void register_callback(void*);
 #include "fpx.h"
 #define DRIVER_NAME	"fpx"
@@ -156,7 +162,11 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 
 			fpx_flush_range((const void*)start, (const void*)end);
 			fep->transmiter_status = STS_TX_INPROGRESS;
+			#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 			dw_start_dma_llw(&fep->pcie->pp, virt_to_phys(fep->d_tx));
+			#else
+			dw_start_dma_llw(fep->pcie, virt_to_phys(fep->d_tx));
+			#endif
 		}
 	}
 	else {
@@ -308,7 +318,11 @@ fpx_enet_open(struct net_device *ndev)
 	int retval = 0;
 	struct fpx_enet_private *fep = netdev_priv(ndev);
 
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 	fep->pcie = s32v_get_dw_pcie();
+	#else
+	fep->pcie = s32v_get_pcie_port();
+	#endif
 
 	if (!fep->pcie) {
 		printk(KERN_ERR"fatal error, cannot access PCI driver\n");
@@ -383,7 +397,11 @@ fpx_enet_open(struct net_device *ndev)
 		device_set_wakeup_enable(&ndev->dev, 0);
 
 		/* register callback */
+		#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 		fep->pcie->pp.call_back = fpx_irq_callback;
+		#else
+		fep->pcie->call_back = fpx_irq_callback;
+		#endif
 		
 #if MSI_WORKAROUND
 		/* configure GPIO S32V2LS_INT_PIN to signal LS2, workaround MSI */
@@ -430,7 +448,11 @@ fpx_enet_close(struct net_device *ndev)
 	gpio_free(S32V2LS_INT_PIN);
 #endif
 	/* unregister callback */
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 	fep->pcie->pp.call_back = NULL;
+	#else
+	fep->pcie->call_back = NULL;
+	#endif
 	fep->pcie = NULL;
 
 	iounmap((void*)fep->msi_zone);

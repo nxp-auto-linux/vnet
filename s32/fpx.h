@@ -63,7 +63,11 @@ struct control_ved
 #define OFFSET_TO_DATA		sizeof(struct control_ved)
 struct fpx_enet_private {
 	/* Hardware registers of the fpx device */
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 	struct dw_pcie *pcie;
+	#else
+	struct pcie_port *pcie;
+	#endif
 	struct control_ved *ctrl_ved_l; /* control virtual ethernet device, local */
 	struct control_ved *ctrl_ved_r; /* control virtual ethernet device, remote */
 	struct net_device *netdev;
