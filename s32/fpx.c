@@ -1,6 +1,6 @@
 /*
  * Freescale PCI Express virtual network driver for S32V234 
- * Copyright 2017 NXP
+ * Copyright 2017-2019 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -27,11 +27,17 @@
 #include <linux/version.h>
 #include <asm/cacheflush.h>
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+#include <../drivers/pci/controller/dwc/pcie-designware.h>
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 #include <../drivers/pci/dwc/pcie-designware.h>
-extern struct dw_pcie *s32v_get_dw_pcie(void);
 #else
 #include <../drivers/pci/host/pcie-designware.h>
+#endif
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
+extern struct dw_pcie *s32v_get_dw_pcie(void);
+#else
 extern struct pcie_port *s32v_get_pcie_port(void);
 #endif
 
