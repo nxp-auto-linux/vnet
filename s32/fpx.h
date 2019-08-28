@@ -18,7 +18,7 @@
 #define STS_TX_IDLE				0
 #define STS_TX_INPROGRESS		1
 
-#define S32_PCI_SMEM			0xfd000000
+#define S32_PCI_SMEM			0xc1000000
 
 #define S32_PCI_SMEM_SIZE		0x00100000	/* 1MB */
 #define LS_PCI_SMEM_SIZE		0x00100000	/* 1MB */
