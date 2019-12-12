@@ -1,6 +1,6 @@
 /*
  * Freescale PCI Express virtual network driver for S32V234 
- * Copyright 2017-2019 NXP
+ * Copyright 2017-2020 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -28,14 +28,16 @@
 #include <asm/cacheflush.h>
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
-#include <../drivers/pci/controller/dwc/pcie-designware.h>
+#include <../drivers/pci/controller/dwc/pci-s32v234.h>
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 #include <../drivers/pci/dwc/pcie-designware.h>
 #else
 #include <../drivers/pci/host/pcie-designware.h>
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+extern struct s32v234_pcie *s32v_get_dw_pcie(void);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 extern struct dw_pcie *s32v_get_dw_pcie(void);
 #else
 extern struct pcie_port *s32v_get_pcie_port(void);
@@ -47,23 +49,13 @@ extern void register_callback(void*);
 
 static struct net_device *s_ndev = NULL;
 
-struct s32v_inbound_region {
-	u32 bar_nr;
-	u32 target_addr;
-	u32 region;
-};
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+extern int s32v_pcie_setup_inbound(struct s32v_inbound_region *inbStr);
+extern int s32v_pcie_setup_outbound(struct s32v_outbound_region *outbStr);
+#else
 extern int s32v_pcie_setup_inbound(void *data);
-
-struct s32v_outbound_region {
-	u64 target_addr;
-	u64 base_addr;
-	u32 size;
-	u32 region;
-	u32 region_type;
-};
-
-
 extern int s32v_pcie_setup_outbound(void *data);
+#endif
 
 static void fpx_flush_range(const void *start, const void *end)
 {
@@ -168,7 +160,9 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 
 			fpx_flush_range((const void*)start, (const void*)end);
 			fep->transmiter_status = STS_TX_INPROGRESS;
-			#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
+			#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+			dw_pcie_dma_start_llw(&(fep->pcie->pcie), &(fep->pcie->dma), virt_to_phys(fep->d_tx));
+			#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 			dw_start_dma_llw(&fep->pcie->pp, virt_to_phys(fep->d_tx));
 			#else
 			dw_start_dma_llw(fep->pcie, virt_to_phys(fep->d_tx));
@@ -335,10 +329,19 @@ fpx_enet_open(struct net_device *ndev)
 		retval = -EINVAL;
 	}
 	else {
+		#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+		struct dw_pcie *pcie = &(fep->pcie->pcie);
+		#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
+		struct dw_pcie *pcie = fep->pcie;
+		#else
+		struct pcie_port *pcie = fep->pcie;
+		#endif
+
+
 		struct s32v_outbound_region outbound;
 
 		/* MSI outbound area */
-		outbound.target_addr = readl(fep->pcie->dbi_base + 0x54);
+		outbound.target_addr = readl(pcie->dbi_base + 0x54);
 
 		if (!outbound.target_addr || (fep->ctrl_ved_l->magic_val != MAGIC_VAL_RC)) {
 			printk(KERN_ERR
@@ -372,11 +375,11 @@ fpx_enet_open(struct net_device *ndev)
 		fep->received_data_r = (volatile u32*)(fep->ctrl_ved_r + 1);
 
 		/* ENABLE MSI for DMA write */
-		writel(S32_PCI_MSI_MEM, fep->pcie->dbi_base + 0x9d0);
-		writel(0, fep->pcie->dbi_base + 0x9d4);
-		writel(S32_PCI_MSI_MEM, fep->pcie->dbi_base + 0x9d8);
-		writel(0, fep->pcie->dbi_base + 0x9dc);
-		writel(0, fep->pcie->dbi_base + 0x9e0);
+		writel(S32_PCI_MSI_MEM, pcie->dbi_base + 0x9d0);
+		writel(0, pcie->dbi_base + 0x9d4);
+		writel(S32_PCI_MSI_MEM, pcie->dbi_base + 0x9d8);
+		writel(0, pcie->dbi_base + 0x9dc);
+		writel(0, pcie->dbi_base + 0x9e0);
 
 		fep->rx_sk_buff_index = 0;
 		fep->ctrl_ved_l->current_write_index = 0;
@@ -403,7 +406,9 @@ fpx_enet_open(struct net_device *ndev)
 		device_set_wakeup_enable(&ndev->dev, 0);
 
 		/* register callback */
-		#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
+		#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+		fep->pcie->call_back = fpx_irq_callback;
+		#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 		fep->pcie->pp.call_back = fpx_irq_callback;
 		#else
 		fep->pcie->call_back = fpx_irq_callback;
@@ -454,7 +459,9 @@ fpx_enet_close(struct net_device *ndev)
 	gpio_free(S32V2LS_INT_PIN);
 #endif
 	/* unregister callback */
-	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+	fep->pcie->call_back = NULL;
+	#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 	fep->pcie->pp.call_back = NULL;
 	#else
 	fep->pcie->call_back = NULL;

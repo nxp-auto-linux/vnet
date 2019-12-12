@@ -1,6 +1,6 @@
 /*
  * Freescale PCI Express virtual network driver for S32V234 
- * Copyright 2017 NXP
+ * Copyright 2017-2020 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -63,7 +63,9 @@ struct control_ved
 #define OFFSET_TO_DATA		sizeof(struct control_ved)
 struct fpx_enet_private {
 	/* Hardware registers of the fpx device */
-	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
+	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+	struct s32v234_pcie *pcie;
+	#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 	struct dw_pcie *pcie;
 	#else
 	struct pcie_port *pcie;
