@@ -1,6 +1,6 @@
 /*
  * Freescale PCI Express virtual network driver for S32V234 
- * Copyright 2017-2020 NXP
+ * Copyright 2017-2021 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -161,7 +161,7 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 			fpx_flush_range((const void*)start, (const void*)end);
 			fep->transmiter_status = STS_TX_INPROGRESS;
 			#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
-			dw_pcie_dma_start_llw(&(fep->pcie->pcie), &(fep->pcie->dma), virt_to_phys(fep->d_tx));
+			dw_pcie_dma_start_llw(&(fep->pcie->dma), virt_to_phys(fep->d_tx));
 			#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 			dw_start_dma_llw(&fep->pcie->pp, virt_to_phys(fep->d_tx));
 			#else
