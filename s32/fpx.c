@@ -27,52 +27,28 @@
 #include <linux/version.h>
 #include <asm/cacheflush.h>
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
-#include <../drivers/pci/controller/dwc/pci-s32v234.h>
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
-#include <../drivers/pci/dwc/pcie-designware.h>
-#else
-#include <../drivers/pci/host/pcie-designware.h>
-#endif
+#include "pcie-designware.h"
+#include "pci-ioctl-s32.h"
+#include "pci-dma-s32.h"
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
-extern struct s32v234_pcie *s32v_get_dw_pcie(void);
-#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
-extern struct dw_pcie *s32v_get_dw_pcie(void);
-#else
-extern struct pcie_port *s32v_get_pcie_port(void);
-#endif
+#include "pci-ioctl-s32.h"
+#include "fpx.h"
+
+struct dw_pcie *s32_get_dw_pcie(void);
 
 extern void register_callback(void*);
-#include "fpx.h"
 #define DRIVER_NAME	"fpx"
 
 static struct net_device *s_ndev = NULL;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
-extern int s32v_pcie_setup_inbound(struct s32v_inbound_region *inbStr);
-extern int s32v_pcie_setup_outbound(struct s32v_outbound_region *outbStr);
-#else
-extern int s32v_pcie_setup_inbound(void *data);
-extern int s32v_pcie_setup_outbound(void *data);
-#endif
-
 static void fpx_flush_range(const void *start, const void *end)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 	__dma_flush_area(start, (size_t)((void*)end - (void*)start));
-#else
-	__dma_flush_range(start, end);
-#endif
 }
 
 inline void fpx_inval_range(const void *start, const void *end)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 	__inval_dcache_area((void *)start, (size_t)((void*)end - (void*)start));
-#else
-	__inval_cache_range(start, end);
-#endif
 }
 
 static netdev_tx_t
@@ -160,13 +136,9 @@ fpx_enet_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 
 			fpx_flush_range((const void*)start, (const void*)end);
 			fep->transmiter_status = STS_TX_INPROGRESS;
-			#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
-			dw_pcie_dma_start_llw(&(fep->pcie->dma), virt_to_phys(fep->d_tx));
-			#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
-			dw_start_dma_llw(&fep->pcie->pp, virt_to_phys(fep->d_tx));
-			#else
-			dw_start_dma_llw(fep->pcie, virt_to_phys(fep->d_tx));
-			#endif
+
+			dw_pcie_dma_start_llw(fep->dma,
+				virt_to_phys(fep->d_tx));
 		}
 	}
 	else {
@@ -318,47 +290,28 @@ fpx_enet_open(struct net_device *ndev)
 	int retval = 0;
 	struct fpx_enet_private *fep = netdev_priv(ndev);
 
-	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
-	fep->pcie = s32v_get_dw_pcie();
-	#else
-	fep->pcie = s32v_get_pcie_port();
-	#endif
+	fep->pcie = s32_get_dw_pcie();
+	fep->dma = dw_get_dma_info(fep->pcie);
 
-	if (!fep->pcie) {
-		printk(KERN_ERR"fatal error, cannot access PCI driver\n");
+	if (!fep->pcie || !fep->dma) {
+		pr_err("fatal error, cannot access PCI driver\n");
 		retval = -EINVAL;
 	}
 	else {
-		#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
-		struct dw_pcie *pcie = &(fep->pcie->pcie);
-		#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 		struct dw_pcie *pcie = fep->pcie;
-		#else
-		struct pcie_port *pcie = fep->pcie;
-		#endif
+		struct s32_outbound_region outbound;
+		void __iomem *msi_base = s32_get_msi_base_address(pcie);
 
-
-		struct s32v_outbound_region outbound;
-
-		/* MSI outbound area */
-		outbound.target_addr = readl(pcie->dbi_base + 0x54);
-
-		if (!outbound.target_addr || (fep->ctrl_ved_l->magic_val != MAGIC_VAL_RC)) {
-			printk(KERN_ERR
-				"PCIe Root-Complex(RC) is not ready yet. Wait until Linux on the RC side enables the PCIe module.\n");
+		if (fep->ctrl_ved_l->magic_val != MAGIC_VAL_RC) {
+			pr_err("PCIe Root-Complex(RC) is not ready yet.\n");
+			pr_err("Wait until Linux on the RC side enables the PCIe module.\n");
 			return -EINVAL;
 		}
 
-		outbound.base_addr = S32_PCI_MSI_MEM;
-		outbound.size = S32_PCI_MSI_SIZE;
-		outbound.region = 3;
-		outbound.region_type = 0; /* memory */
-		s32v_pcie_setup_outbound(&outbound);
-		/* do ioremap nocache, Remote area, outbound */
-		fep->remote_res = request_mem_region(S32_PCI_MSI_MEM, S32_PCI_MSI_SIZE,
-			"pcie-msi-buff");
-		fep->msi_zone = (volatile int *)ioremap_nocache(
-			(resource_size_t)S32_PCI_MSI_MEM, (unsigned long)S32_PCI_MSI_SIZE);
+		if (!s32_set_msi(pcie)) {
+			pr_err("Unable to configure MSIs.\n");
+			return -ENOMEM;
+		}
 
 		/* set outbound area  */
 		outbound.target_addr = fep->ctrl_ved_l->address_offset;
@@ -366,7 +319,7 @@ fpx_enet_open(struct net_device *ndev)
 		outbound.size = LS_PCI_SMEM_SIZE;
 		outbound.region = 0;
 		outbound.region_type = 0; /* memory */
-		s32v_pcie_setup_outbound(&outbound);
+		s32_pcie_setup_outbound(&outbound);
 		/* do ioremap nocache, Remote area, outbound */
 		fep->remote_res = request_mem_region(S32V_REMOTE_PCI_BASE, LS_PCI_SMEM_SIZE,
                                     "pcie-remote-buff");
@@ -375,9 +328,13 @@ fpx_enet_open(struct net_device *ndev)
 		fep->received_data_r = (volatile u32*)(fep->ctrl_ved_r + 1);
 
 		/* ENABLE MSI for DMA write */
-		writel(S32_PCI_MSI_MEM, pcie->dbi_base + 0x9d0);
+		/* TODO: Move this code somewhere else, e.g. in pci-dma-s32.c,
+		 * and refactor it, e.g. use register offset definitions and
+		 * write the whole 64bit address
+		 */
+		writel((unsigned int)msi_base, pcie->dbi_base + 0x9d0);
 		writel(0, pcie->dbi_base + 0x9d4);
-		writel(S32_PCI_MSI_MEM, pcie->dbi_base + 0x9d8);
+		writel((unsigned int)msi_base, pcie->dbi_base + 0x9d8);
 		writel(0, pcie->dbi_base + 0x9dc);
 		writel(0, pcie->dbi_base + 0x9e0);
 
@@ -391,7 +348,7 @@ fpx_enet_open(struct net_device *ndev)
 				fep->sk_buff_queue_rx[retval] = sk;
 			}
 			else {
-				printk(KERN_ERR"cannot alloc buffer %d\n", retval);
+				pr_err("Cannot alloc buffer %d\n", retval);
 				retval --;
 			}
 		}
@@ -406,13 +363,7 @@ fpx_enet_open(struct net_device *ndev)
 		device_set_wakeup_enable(&ndev->dev, 0);
 
 		/* register callback */
-		#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
-		fep->pcie->call_back = fpx_irq_callback;
-		#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
-		fep->pcie->pp.call_back = fpx_irq_callback;
-		#else
-		fep->pcie->call_back = fpx_irq_callback;
-		#endif
+		s32_register_callback(fep->pcie, fpx_irq_callback);
 		
 #if MSI_WORKAROUND
 		/* configure GPIO S32V2LS_INT_PIN to signal LS2, workaround MSI */
@@ -436,7 +387,8 @@ fpx_enet_open(struct net_device *ndev)
 		else {
 			fep->irq = retval;
 			if (request_irq(retval, fpx_rx, IRQF_TRIGGER_FALLING | IRQF_TRIGGER_RISING, ndev->name, ndev)) {
-				printk(KERN_ERR"failed to register interrupt %d\n", retval);
+				pr_err("Failed to register interrupt %d\n",
+					retval);
 			}
 			else {
 				retval = 0;
@@ -459,17 +411,8 @@ fpx_enet_close(struct net_device *ndev)
 	gpio_free(S32V2LS_INT_PIN);
 #endif
 	/* unregister callback */
-	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
-	fep->pcie->call_back = NULL;
-	#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
-	fep->pcie->pp.call_back = NULL;
-	#else
-	fep->pcie->call_back = NULL;
-	#endif
+	s32_register_callback(fep->pcie, NULL);
 	fep->pcie = NULL;
-
-	iounmap((void*)fep->msi_zone);
-	release_mem_region(S32_PCI_MSI_MEM, S32_PCI_MSI_SIZE);
 
 	if (netif_device_present(ndev)) {
 		napi_disable(&fep->napi);
@@ -522,7 +465,7 @@ static int __init fpx_init(void)
 	int ret = 0;
 	struct fpx_enet_private *fep = NULL;
 	struct net_device *ndev = NULL;
-	struct s32v_inbound_region inbound;
+	struct s32_inbound_region inbound;
 
 	printk(KERN_ERR "installing new fep module\n");
 	ndev = alloc_netdev(sizeof(struct fpx_enet_private),
@@ -548,7 +491,7 @@ static int __init fpx_init(void)
 	inbound.bar_nr = 0;
 	inbound.target_addr = S32_PCI_SMEM;
 	inbound.region = 0;
-	s32v_pcie_setup_inbound(&inbound);
+	s32_pcie_setup_inbound(&inbound);
 	/* do ioremap nocache, Local area, inbound */
 	fep->local_res = request_mem_region(S32_PCI_SMEM, S32_PCI_SMEM_SIZE,
                                     "pcie-local-buff");

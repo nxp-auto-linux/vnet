@@ -8,6 +8,8 @@
 #
 
 obj-$(CONFIG_VNET_S32) := fpx.o
+CFLAGS_fpx.o := -I$(srctree)/drivers/pci/controller/dwc
+
 PWD := $(shell pwd)
 all:
 	make -C $(KERNEL_DIR) SUBDIRS=$(PWD) modules

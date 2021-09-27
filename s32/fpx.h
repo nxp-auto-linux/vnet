@@ -1,6 +1,6 @@
 /*
  * Freescale PCI Express virtual network driver for S32V234 
- * Copyright 2017-2020 NXP
+ * Copyright 2017-2021 NXP
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -23,9 +23,6 @@
 #define S32_PCI_SMEM_SIZE		0x00100000	/* 1MB */
 #define LS_PCI_SMEM_SIZE		0x00100000	/* 1MB */
 #define S32V_REMOTE_PCI_BASE	0x72000000	/* Local, S32V */
-
-#define S32_PCI_MSI_SIZE		0x10000		/* 64 KB */
-#define S32_PCI_MSI_MEM			0x72FB0000
 
 #define CHAIN_SUPPORT			0
 
@@ -63,13 +60,9 @@ struct control_ved
 #define OFFSET_TO_DATA		sizeof(struct control_ved)
 struct fpx_enet_private {
 	/* Hardware registers of the fpx device */
-	#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
-	struct s32v234_pcie *pcie;
-	#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 8, 4)
 	struct dw_pcie *pcie;
-	#else
-	struct pcie_port *pcie;
-	#endif
+	struct dma_info *dma;
+
 	struct control_ved *ctrl_ved_l; /* control virtual ethernet device, local */
 	struct control_ved *ctrl_ved_r; /* control virtual ethernet device, remote */
 	struct net_device *netdev;
@@ -86,7 +79,6 @@ struct fpx_enet_private {
 	struct sk_buff *sk_buff_queue_tx_inprogress[SKBUF_Q_SIZE];
 	struct resource *local_res;
 	struct resource *remote_res;
-	volatile int* msi_zone;
 	struct sk_buff *sk_buff_queue_rx[SKBUF_Q_SIZE];
 	int rx_sk_buff_index;
 	int irq;
